@@ -6,3 +6,11 @@ menuconfig MTD_SPI_NAND
 	select SPI_MEM
 	help
 	  This is the framework for the SPI NAND device drivers.
+
+config MTD_EN75_BMT
+	bool "EcoNet EN75xx vendor BMT/BBT translation (read-only)"
+	depends on MTD_SPI_NAND
+	help
+	  Honour the EcoNet/Airoha factory BBT and BMT so logical NAND
+	  addresses match the bootbase and Linux. Read-only: never rewrite
+	  the tables.

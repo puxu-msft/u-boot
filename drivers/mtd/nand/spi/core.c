@@ -33,6 +33,7 @@
 #include <linux/mtd/spinand.h>
 #include <linux/printk.h>
 #include <linux/delay.h>
+#include "en75_bmt.h"
 #endif
 
 struct spinand_plat {
@@ -1703,15 +1704,21 @@ static int spinand_probe(struct udevice *dev)
 #ifndef __UBOOT__
 	ret = mtd_device_register(mtd, NULL, 0);
 #else
+	ret = en75_bmt_attach(mtd);
+	if (ret)
+		goto err_spinand_cleanup;
+
 	ret = add_mtd_device(mtd);
 #endif
 	if (ret)
-		goto err_spinand_cleanup;
+		goto err_bmt_detach;
 
 	plat->mtd = mtd;
 
 	return 0;
 
+err_bmt_detach:
+	en75_bmt_detach(mtd);
 err_spinand_cleanup:
 	spinand_cleanup(spinand);
 
