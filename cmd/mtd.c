@@ -519,6 +519,13 @@ static int do_mtd_io(struct cmd_tbl *cmdtp, int flag, int argc,
 		goto out_put_mtd;
 	}
 
+	if (start_off >= mtd->size) {
+		printf("Offset 0x%llx is past the end of %s (size 0x%llx)\n",
+		       start_off, mtd->name, mtd->size);
+		ret = CMD_RET_FAILURE;
+		goto out_put_mtd;
+	}
+
 	default_len = dump ? mtd->writesize : mtd->size;
 	len = argc > 1 ? hextoul(argv[1], NULL) : default_len;
 	if (!mtd_is_aligned_with_min_io_size(mtd, len)) {
@@ -557,10 +564,20 @@ static int do_mtd_io(struct cmd_tbl *cmdtp, int flag, int argc,
 	io_op.datbuf = buf;
 	io_op.oobbuf = woob ? &buf[len] : NULL;
 
-	/* Search for the first good block after the given offset */
+	/*
+	 * Search for the first good block after the given offset.
+	 * Bounded: mtd_block_isbad() returns a negative errno past the end of
+	 * the device, which is nonzero and would otherwise spin forever.
+	 */
 	off = start_off;
-	while (mtd_block_isbad(mtd, off))
+	while (off < mtd->size && mtd_block_isbad(mtd, off) > 0)
 		off += mtd->erasesize;
+
+	if (off >= mtd->size) {
+		printf("No good block found after offset 0x%llx\n", start_off);
+		ret = CMD_RET_FAILURE;
+		goto out_put_mtd;
+	}
 
 	led_activity_blink();
 
@@ -569,9 +586,16 @@ static int do_mtd_io(struct cmd_tbl *cmdtp, int flag, int argc,
 
 	/* Loop over the pages to do the actual read/write */
 	while (remaining) {
+		if (off >= mtd->size) {
+			printf("Reached the end of %s before completing\n",
+			       mtd->name);
+			ret = -EIO;
+			break;
+		}
+
 		/* Skip the block if it is bad */
 		if (mtd_is_aligned_with_block_size(mtd, off) &&
-		    mtd_block_isbad(mtd, off)) {
+		    mtd_block_isbad(mtd, off) > 0) {
 			off += mtd->erasesize;
 			continue;
 		}

@@ -675,7 +675,7 @@ config ENV_OFFSET_RELATIVE_END
 config ENV_OFFSET_REDUND
 	hex "Redundant environment offset"
 	depends on (ENV_IS_IN_EEPROM || ENV_IS_IN_MMC || ENV_IS_IN_NAND || \
-		    ENV_IS_IN_SPI_FLASH) && ENV_REDUNDANT
+		    ENV_IS_IN_SPI_FLASH || ENV_IS_IN_MTD) && ENV_REDUNDANT
 	default 0x10C0000 if MICROBLAZE
 	default 0x0
 	help

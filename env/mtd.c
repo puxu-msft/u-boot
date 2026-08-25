@@ -2,6 +2,7 @@
 /*
  *  Author: Christian Marangi <ansuelsmth@gmail.com>
  */
+#include <env.h>
 #include <env_internal.h>
 #include <errno.h>
 #include <malloc.h>
@@ -9,6 +10,7 @@
 #include <asm/cache.h>
 #include <asm/global_data.h>
 #include <linux/mtd/mtd.h>
+#include <memalign.h>
 #include <u-boot/crc.h>
 
 DECLARE_GLOBAL_DATA_PTR;
@@ -30,6 +32,29 @@ static int setup_mtd_device(struct mtd_info **mtd_env)
 	return 0;
 }
 
+static int env_mtd_read_buf(struct mtd_info *mtd, u32 offset, void *buf, int len)
+{
+	u32 sect_size = mtd->erasesize;
+	size_t ret_len;
+	char *tmp = buf;
+	int remaining = len;
+	int ret;
+
+	while (remaining) {
+		if (!(offset % sect_size) && mtd_block_isbad(mtd, offset)) {
+			offset += sect_size;
+			continue;
+		}
+		ret = mtd_read(mtd, offset, mtd->writesize, &ret_len, tmp);
+		if (ret)
+			return ret;
+		tmp += ret_len;
+		offset += ret_len;
+		remaining -= ret_len;
+	}
+	return 0;
+}
+
 static int env_mtd_save(void)
 {
 	char *saved_buf = NULL, *write_buf, *tmp;
@@ -40,7 +65,7 @@ static int env_mtd_save(void)
 	u32 write_size;
 	env_t env_new;
 	int remaining;
-	u32 offset;
+	u32 offset, save_off;
 	int ret;
 
 	ret = setup_mtd_device(&mtd_env);
@@ -48,6 +73,12 @@ static int env_mtd_save(void)
 		return ret;
 
 	sect_size = mtd_env->erasesize;
+#ifdef CONFIG_ENV_OFFSET_REDUND
+	save_off = (gd->env_valid == ENV_VALID) ?
+		CONFIG_ENV_OFFSET_REDUND : CONFIG_ENV_OFFSET;
+#else
+	save_off = CONFIG_ENV_OFFSET;
+#endif
 
 	/* Is the sector larger than the env (i.e. embedded) */
 	if (sect_size > CONFIG_ENV_SIZE) {
@@ -57,7 +88,7 @@ static int env_mtd_save(void)
 			goto done;
 		}
 
-		offset = CONFIG_ENV_OFFSET;
+		offset = save_off;
 		remaining = sect_size;
 		tmp = saved_buf;
 
@@ -87,7 +118,7 @@ static int env_mtd_save(void)
 	sect_num = DIV_ROUND_UP(CONFIG_ENV_SIZE, sect_size);
 
 	ei.mtd = mtd_env;
-	ei.addr = CONFIG_ENV_OFFSET;
+	ei.addr = save_off;
 	ei.len = sect_num * sect_size;
 
 	puts("Erasing MTD...");
@@ -104,7 +135,7 @@ static int env_mtd_save(void)
 		write_buf = (char *)&env_new;
 	}
 
-	offset = CONFIG_ENV_OFFSET;
+	offset = save_off;
 	remaining = write_size;
 	tmp = write_buf;
 
@@ -129,6 +160,9 @@ static int env_mtd_save(void)
 
 	ret = 0;
 	puts("done\n");
+#ifdef CONFIG_ENV_OFFSET_REDUND
+	gd->env_valid = gd->env_valid == ENV_VALID ? ENV_REDUND : ENV_VALID;
+#endif
 
 done:
 	put_mtd_device(mtd_env);
@@ -142,12 +176,8 @@ done:
 static int env_mtd_load(void)
 {
 	struct mtd_info *mtd_env;
-	char *buf, *tmp;
-	size_t ret_len;
-	int remaining;
-	u32 sect_size;
-	u32 offset;
-	int ret;
+	char *buf, *buf2 = NULL;
+	int ret, read1_fail, read2_fail = 1;
 
 	buf = (char *)memalign(ARCH_DMA_MINALIGN, CONFIG_ENV_SIZE);
 	if (!buf) {
@@ -159,40 +189,34 @@ static int env_mtd_load(void)
 	if (ret)
 		goto out;
 
-	sect_size = mtd_env->erasesize;
-
-	offset = CONFIG_ENV_OFFSET;
-	remaining = CONFIG_ENV_SIZE;
-	tmp = buf;
-
-	while (remaining) {
-		/* Skip the block if it is bad */
-		if (!(offset % sect_size) &&
-		    mtd_block_isbad(mtd_env, offset)) {
-			offset += sect_size;
-			continue;
-		}
-
-		ret = mtd_read(mtd_env, offset, mtd_env->writesize,
-			       &ret_len, tmp);
-		if (ret) {
-			env_set_default("mtd_read() failed", 1);
-			goto out;
-		}
-
-		tmp += ret_len;
-		offset += ret_len;
-		remaining -= ret_len;
+	read1_fail = env_mtd_read_buf(mtd_env, CONFIG_ENV_OFFSET, buf,
+				      CONFIG_ENV_SIZE);
+#ifdef CONFIG_ENV_OFFSET_REDUND
+	buf2 = (char *)memalign(ARCH_DMA_MINALIGN, CONFIG_ENV_SIZE);
+	if (!buf2) {
+		env_set_default("memalign() failed", 0);
+		ret = -EIO;
+		goto out_dev;
 	}
-
+	read2_fail = env_mtd_read_buf(mtd_env, CONFIG_ENV_OFFSET_REDUND, buf2,
+				      CONFIG_ENV_SIZE);
+	ret = env_import_redund(buf, read1_fail, buf2, read2_fail, H_EXTERNAL);
+#else
+	if (read1_fail) {
+		env_set_default("mtd_read() failed", 1);
+		ret = read1_fail;
+		goto out_dev;
+	}
 	ret = env_import(buf, 1, H_EXTERNAL);
 	if (!ret)
 		gd->env_valid = ENV_VALID;
+#endif
 
-out:
+out_dev:
 	put_mtd_device(mtd_env);
-
+out:
 	free(buf);
+	free(buf2);
 
 	return ret;
 }
