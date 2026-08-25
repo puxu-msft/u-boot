@@ -442,14 +442,30 @@ int image_decomp_type(const unsigned char *buf, ulong len)
 	return cmagic->comp_id;
 }
 
+#if !defined(USE_HOSTCC)
+void *__weak image_get_decomp_buf(void *load_buf)
+{
+	return load_buf;
+}
+
+void __weak image_decomp_flush(ulong load, ulong image_len)
+{
+}
+#endif
+
 int image_decomp(int comp, ulong load, ulong image_start, int type,
 		 void *load_buf, void *image_buf, ulong image_len,
 		 uint unc_len, ulong *load_end)
 {
 	int ret = -ENOSYS;
+	void *dst = load_buf;
 
 	*load_end = load;
 	print_decomp_msg(comp, type, load == image_start, load);
+
+#if !defined(USE_HOSTCC)
+	dst = image_get_decomp_buf(load_buf);
+#endif
 
 	/*
 	 * Load the image to the right place, decompressing if needed. After
@@ -462,13 +478,13 @@ int image_decomp(int comp, ulong load, ulong image_start, int type,
 		if (load == image_start)
 			break;
 		if (image_len <= unc_len)
-			memmove_wd(load_buf, image_buf, image_len, CHUNKSZ);
+			memmove_wd(dst, image_buf, image_len, CHUNKSZ);
 		else
 			ret = -ENOSPC;
 		break;
 	case IH_COMP_GZIP:
 		if (!tools_build() && CONFIG_IS_ENABLED(GZIP))
-			ret = gunzip(load_buf, unc_len, image_buf, &image_len);
+			ret = gunzip(dst, unc_len, image_buf, &image_len);
 		break;
 	case IH_COMP_BZIP2:
 		if (!tools_build() && CONFIG_IS_ENABLED(BZIP2)) {
@@ -479,7 +495,7 @@ int image_decomp(int comp, ulong load, ulong image_start, int type,
 			 * use slower decompression algorithm which requires
 			 * at most 2300 KB of memory.
 			 */
-			ret = BZ2_bzBuffToBuffDecompress(load_buf, &size,
+			ret = BZ2_bzBuffToBuffDecompress(dst, &size,
 				image_buf, image_len, CONSERVE_MEMORY, 0);
 			image_len = size;
 		}
@@ -488,7 +504,7 @@ int image_decomp(int comp, ulong load, ulong image_start, int type,
 		if (!tools_build() && CONFIG_IS_ENABLED(LZMA)) {
 			SizeT lzma_len = unc_len;
 
-			ret = lzmaBuffToBuffDecompress(load_buf, &lzma_len,
+			ret = lzmaBuffToBuffDecompress(dst, &lzma_len,
 						       image_buf, image_len);
 			image_len = lzma_len;
 		}
@@ -497,7 +513,7 @@ int image_decomp(int comp, ulong load, ulong image_start, int type,
 		if (!tools_build() && CONFIG_IS_ENABLED(LZO)) {
 			size_t size = unc_len;
 
-			ret = lzop_decompress(image_buf, image_len, load_buf, &size);
+			ret = lzop_decompress(image_buf, image_len, dst, &size);
 			image_len = size;
 		}
 		break;
@@ -505,7 +521,7 @@ int image_decomp(int comp, ulong load, ulong image_start, int type,
 		if (!tools_build() && CONFIG_IS_ENABLED(LZ4)) {
 			size_t size = unc_len;
 
-			ret = ulz4fn(image_buf, image_len, load_buf, &size);
+			ret = ulz4fn(image_buf, image_len, dst, &size);
 			image_len = size;
 		}
 		break;
@@ -514,7 +530,7 @@ int image_decomp(int comp, ulong load, ulong image_start, int type,
 			struct abuf in, out;
 
 			abuf_init_set(&in, image_buf, image_len);
-			abuf_init_set(&out, load_buf, unc_len);
+			abuf_init_set(&out, dst, unc_len);
 			ret = zstd_decompress(&in, &out);
 			if (ret >= 0) {
 				image_len = ret;
@@ -531,6 +547,10 @@ int image_decomp(int comp, ulong load, ulong image_start, int type,
 	*load_end = load + image_len;
 	if (ret)
 		return ret;
+
+#if !defined(USE_HOSTCC)
+	image_decomp_flush(load, image_len);
+#endif
 
 	return 0;
 }

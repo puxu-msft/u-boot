@@ -1092,6 +1092,11 @@ int image_decomp(int comp, ulong load, ulong image_start, int type,
 		 void *load_buf, void *image_buf, ulong image_len,
 		 uint unc_len, ulong *load_end);
 
+#ifndef USE_HOSTCC
+void *image_get_decomp_buf(void *load_buf);
+void image_decomp_flush(ulong load, ulong image_len);
+#endif
+
 /**
  * Set up properties in the FDT
  *
