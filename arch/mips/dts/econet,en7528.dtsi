@@ -1,0 +1,154 @@
+// SPDX-License-Identifier: GPL-2.0+
+/* EcoNet/Airoha EN7528 (MIPS 1004Kc, little-endian) */
+
+/ {
+	#address-cells = <1>;
+	#size-cells = <1>;
+
+	cpus {
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		cpu@0 {
+			compatible = "mips,mips1004Kc";
+			device_type = "cpu";
+			reg = <0>;
+		};
+
+		cpu@1 {
+			compatible = "mips,mips1004Kc";
+			device_type = "cpu";
+			reg = <1>;
+		};
+	};
+
+	memory@0 {
+		device_type = "memory";
+		/* Capped below the 0x1fxxxxxx MMIO island; DDR stage
+		 * publishes the true size at runtime (dram_init). */
+		reg = <0x00000000 0x10000000>;
+	};
+
+	/* Dummy clock/phy so xhci-mtk's mandatory clk_get_bulk()/
+	 * generic_phy_get_bulk() succeed without an en7528 SCU clock or
+	 * T-PHY driver; the real USB clock is left ungated by the bootbase
+	 * and the xHCI IPPC block does the port power-up. */
+	usb_clk: usb-clk {
+		compatible = "fixed-clock";
+		#clock-cells = <0>;
+		clock-frequency = <24000000>;
+	};
+
+	usb_phy: usb-phy {
+		compatible = "nop-phy";
+		#phy-cells = <0>;
+		clocks = <&usb_clk>;	/* nop_phy_probe() calls clk_get_bulk() */
+	};
+
+	soc {
+		compatible = "simple-bus";
+		#address-cells = <1>;
+		#size-cells = <1>;
+		ranges;
+
+		syscon: syscon@1fb00000 {
+			compatible = "econet,en7528-syscon", "syscon";
+			reg = <0x1fb00000 0x1000>;
+		};
+
+		sfc: spi@1fa10000 {
+			compatible = "airoha,en7581-snand";
+			reg = <0x1fa10000 0x140>,
+			      <0x1fa11000 0x1000>;	/* NFI: driver uses up to 0x55c;
+							 * U-Boot regmap range-checks (Linux
+							 * gets a full page from ioremap). */
+			#address-cells = <1>;
+			#size-cells = <0>;
+			status = "disabled";
+
+			spi_nand: nand@0 {
+				compatible = "spi-nand";
+				reg = <0>;
+				spi-max-frequency = <20000000>;
+				spi-tx-bus-width = <1>;
+				spi-rx-bus-width = <2>;
+			};
+		};
+
+		sram@1fa30000 {
+			compatible = "mmio-sram";
+			reg = <0x1fa30000 0x20000>;
+		};
+
+		dramc: memory-controller@1fb20000 {
+			compatible = "econet,en7528-dramc";
+			reg = <0x1fb20000 0x1000>;
+		};
+
+		/*
+		 * EN7528 Ethernet = same EN751221-family FE/QDMA as the EN7512,
+		 * feeding an MT7530-family DSA switch (GMAC0 -> switch CPU port).
+		 * The airoha_eth U-Boot driver binds "econet,en751221-eth" and
+		 * self-initializes the "mediatek,mt7530" switch.
+		 */
+		ethernet: ethernet@1fb50000 {
+			compatible = "econet,en751221-eth";
+			reg = <0x1fb50000 0x4000>,
+			      <0x1fb54000 0x1000>;
+			reg-names = "fe", "qdma0";
+			#address-cells = <1>;
+			#size-cells = <0>;
+			status = "disabled";
+
+			gmac0: mac@0 {
+				compatible = "econet,eth-mac";
+				reg = <0>;
+				phy-mode = "trgmii";
+			};
+		};
+
+		switch0: switch@1fb58000 {
+			compatible = "mediatek,mt7530";
+			reg = <0x1fb58000 0x8000>;
+			status = "disabled";
+		};
+
+		/*
+		 * USB3 host = MediaTek xHCI (same IP as mt8173), driven by
+		 * U-Boot's xhci-mtk. "mac" is the xHCI MMIO, "ippc" the IP port
+		 * control block (a sub-region of the USB T-PHY window). The
+		 * en7528 USB clock is ungated by the bootbase (the kernel node
+		 * carries no clocks either) so &usb_clk is a dummy fixed-clock
+		 * to satisfy clk_get_bulk(); &usb_phy is a nop-phy (the xHCI
+		 * IPPC block powers the ports up itself). USB reset/PHY-reset are
+		 * released by a direct SCU poke in board_late_init (there is no
+		 * DM reset provider in this port — see board.c).
+		 */
+		usb: usb@1fb90000 {
+			compatible = "mediatek,mtk-xhci";
+			reg = <0x1fb90000 0x4000>,
+			      <0x1fa80700 0x100>;
+			reg-names = "mac", "ippc";
+			clocks = <&usb_clk>;
+			phys = <&usb_phy>;
+			/*
+			 * USB2-only: the U3/SerDes path needs SCU/serdes config
+			 * we don't do, and leaving U3 enabled makes xhci-mtk stall
+			 * on an unstable U3 clock (per the Airoha AN7581 USB PHY
+			 * commit). Disable both U3 ports so only USB2 is brought up.
+			 */
+			mediatek,u3p-dis-msk = <0x3>;
+			status = "disabled";
+		};
+
+		uart0: serial@1fbf0000 {
+			compatible = "econet,en7528-uart";
+			reg = <0x1fbf0000 0x30>;
+			reg-io-width = <4>;
+			reg-shift = <2>;
+			clock-frequency = <2000000>;
+			current-speed = <115200>;
+			status = "disabled";
+		};
+	};
+};

@@ -1,0 +1,25 @@
+// SPDX-License-Identifier: GPL-2.0+
+/dts-v1/;
+
+#include "econet,en7528.dtsi"
+
+/ {
+	model = "EcoNet EN7528 reference board (DASAN H660GM-A)";
+	compatible = "econet,en7528-reference", "econet,en7528";
+
+	aliases {
+		serial0 = &uart0;
+	};
+
+	chosen {
+		stdout-path = "serial0:115200n8";
+	};
+};
+
+&uart0 {
+	status = "okay";
+};
+
+&sfc {
+	status = "okay";
+};

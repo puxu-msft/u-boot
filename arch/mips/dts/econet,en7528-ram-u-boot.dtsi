@@ -1,0 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0+
+/* RAM-boot: no binman image; just make the console available pre-relocation. */
+
+&uart0 {
+	bootph-all;
+};

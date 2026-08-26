@@ -1,0 +1,62 @@
+// SPDX-License-Identifier: GPL-2.0+
+#include <linux/stringify.h>
+
+/ {
+	binman: binman {
+		multiple-images;
+	};
+};
+
+&uart0 {
+	bootph-all;
+};
+
+&binman {
+	spl-img {
+		filename = "u-boot-spl.img";
+
+		mkimage {
+			args = "-A", "mips", "-T", "standalone", "-O", "u-boot",
+			       "-C", "none", "-n", "EN7528 U-Boot SPL",
+			       "-a", __stringify(CONFIG_SPL_TEXT_BASE),
+			       "-e", __stringify(CONFIG_SPL_TEXT_BASE);
+
+			u-boot-spl {
+			};
+		};
+	};
+
+	en7528-uboot {
+		filename = "u-boot-en7528.bin";
+		pad-byte = <0xff>;
+
+		u-boot-tpl {
+			offset = <0x00000000>;
+			size = <0x00008000>;
+		};
+
+		/*
+		 * en7528_ddr.bin is the 0x5a70-byte FE-SRAM DDR3 stage extracted from the
+		 * vendor bootloader (see doc/board/econet/en7528.rst).
+		 */
+		ddr-blob {
+			type = "blob-ext";
+			filename = "arch/mips/mach-en75xx/en7528_ddr.bin";
+			offset = <0x00008000>;
+			size = <0x00005a70>;
+		};
+
+		spl {
+			type = "blob";
+			filename = "u-boot-spl.img";
+			offset = <0x00020000>;
+			size = <0x00030000>;
+		};
+
+		u-boot {
+			type = "blob";
+			filename = "u-boot.img";
+			offset = <0x00050000>;
+		};
+	};
+};
