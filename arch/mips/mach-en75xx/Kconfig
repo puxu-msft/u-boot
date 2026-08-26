@@ -1,0 +1,100 @@
+menu "EcoNet/Airoha EN75xx platforms"
+	depends on ARCH_EN75XX
+
+config SYS_VENDOR
+	default "econet"
+
+# Common SoC-identity flag selected by every EN7528 board (reference/RAM/...).
+config SOC_EN7528
+	bool
+	select MIPS_SKIP_CP0_COUNT_CLEAR
+
+config SYS_SOC
+	default "en7528" if SOC_EN7528
+	default "en7512"
+
+config SYS_BOARD
+	default "en7528" if SOC_EN7528
+	default "en7512"
+
+config SYS_CONFIG_NAME
+	default "en7528" if SOC_EN7528
+	default "en7512"
+
+config SYS_MALLOC_F_LEN
+	default 0x2000
+
+config SYS_DCACHE_SIZE
+	default 32768
+
+config SYS_DCACHE_LINE_SIZE
+	default 32
+
+config SYS_ICACHE_SIZE
+	default 32768
+
+config SYS_ICACHE_LINE_SIZE
+	default 32
+
+config TEXT_BASE
+	default 0x80020000 if BOARD_EN7528_RAM
+	default 0x81000000
+
+config SPL_TEXT_BASE
+	default 0x80010000
+
+config SPL_SIZE_LIMIT
+	default 0x30000
+
+config TPL_TEXT_BASE
+	default 0xbfc00000
+
+config TPL_MAX_SIZE
+	default 0x8000
+
+
+config BUILD_TARGET
+	default "u-boot.img" if BOARD_EN7512_REFERENCE
+	default "u-boot.bin" if BOARD_EN7528_REFERENCE
+	default "u-boot.bin" if BOARD_EN7528_RAM
+
+choice
+	prompt "EN75xx reference board"
+	default BOARD_EN7512_REFERENCE
+
+config BOARD_EN7512_REFERENCE
+	bool "EN7512/EN7521 reference board"
+	select BINMAN
+	select SPL_LOADER_SUPPORT if SPL
+	help
+	  Build a boot image compatible with the EN7512/EN7521 TCBoot flow.
+	  TPL initializes the serial flash controller, executes the legacy DDR
+	  calibration stage from FE SRAM and loads SPL into DDR.
+
+config BOARD_EN7528_REFERENCE
+	bool "EN7528 reference board (DASAN H660GM-A)"
+	select SOC_EN7528
+	select BINMAN
+	select SPL_LOADER_SUPPORT if SPL
+	help
+	  Build a boot image for the little-endian MIPS1004Kc EN7528. TPL brings
+	  up the SoC and runs the FE-SRAM DDR3 calibration stage (en7528_ddr.bin,
+	  extracted from the vendor bootloader) before loading SPL into DDR. The exact
+	  DDR-stage entry/handoff is validated over UART during bring-up; see
+	  doc/board/econet/en7528.rst.
+
+config BOARD_EN7528_RAM
+	bool "EN7528 RAM-boot (loaded by the stock bootbase at 0x80020000)"
+	select SOC_EN7528
+	help
+	  Build a standalone U-Boot proper (no TPL/SPL, no DDR blob) linked at
+	  0x80020000 to be RAM-loaded by the stock bootbase, which has already
+	  initialized DRAM. XMODEM it in from the bldr> prompt ("xmdm 80020000
+	  <len>") and run it with "jump 80020000". This is the non-destructive
+	  bring-up path that exercises the whole upper stack (console, DTS, DM,
+	  U-Boot proper) on real EN7528 silicon without needing the DDR stage.
+
+
+endchoice
+
+endmenu

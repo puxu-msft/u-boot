@@ -88,6 +88,26 @@ config ARCH_MTMIPS
 	select SUPPORT_LITTLE_ENDIAN
 	select SUPPORT_SPL
 
+config ARCH_EN75XX
+	bool "Support EcoNet/Airoha EN75xx MIPS platforms"
+	select HAS_FIXED_TIMER_FREQUENCY
+	select DM
+	select DM_SERIAL
+	select EN75XX_SERIAL
+	select OF_CONTROL
+	select ROM_EXCEPTION_VECTORS
+	select SUPPORT_BIG_ENDIAN
+	select SUPPORT_LITTLE_ENDIAN
+	select SUPPORTS_CPU_MIPS32_R2
+	select SUPPORT_SPL
+	select SPL_SKIP_LOWLEVEL_INIT if SPL
+	select SUPPORT_TPL
+	select SYS_CACHE_SHIFT_5
+	select MIPS_TUNE_34KC
+	help
+	  Support the EcoNet/Airoha EN75xx MIPS SoCs: the big-endian MIPS34Kc
+	  EN7512/EN7521 and the little-endian MIPS1004Kc EN7528.
+
 config ARCH_JZ47XX
 	bool "Support Ingenic JZ47xx"
 	select SUPPORT_SPL
@@ -201,6 +221,7 @@ source "arch/mips/mach-mscc/Kconfig"
 source "arch/mips/mach-bmips/Kconfig"
 source "arch/mips/mach-jz47xx/Kconfig"
 source "arch/mips/mach-pic32/Kconfig"
+source "arch/mips/mach-en75xx/Kconfig"
 source "arch/mips/mach-mtmips/Kconfig"
 source "arch/mips/mach-octeon/Kconfig"
 
@@ -321,6 +342,14 @@ config MIPS_MACH_EARLY_INIT
 	  CPU / SoC intitialization or image copying. Its called very early
 	  and at this stage the PC might not match the linking address
 	  (CONFIG_TEXT_BASE) - no absolute jump done until this call.
+
+config MIPS_SKIP_CP0_COUNT_CLEAR
+	bool
+	help
+	  Do not clear the CP0 Count register (mtc0 zero, CP0_COUNT) at reset
+	  in arch/mips/cpu/start.S. On some SoCs the Count register is GIC/CM
+	  backed and that write stalls the CPU; such targets select this.
+	  Other MIPS targets keep the generic clear.
 
 config MIPS_CACHE_SETUP
 	bool "Allow generic start code to initialize and setup caches"
