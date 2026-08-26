@@ -1113,6 +1113,13 @@ config ZYNQ_SERIAL
 	  This driver supports the Cadence UART. It is found e.g. in Xilinx
 	  Zynq/ZynqMP.
 
+config EN75XX_SERIAL
+	bool "EcoNet/Airoha EN75xx serial port support"
+	depends on ARCH_EN75XX
+	help
+	  Support the byte-lane 16550-like UART used by EN7512/EN7521/EN7528.
+	  The controller also uses a vendor-specific fractional divider.
+
 config MTK_SERIAL
 	bool "MediaTek High-speed UART support"
 	depends on DM_SERIAL
