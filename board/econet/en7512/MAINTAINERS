@@ -1,0 +1,8 @@
+ECONET EN7512 REFERENCE BOARD
+M:	AK Sharma <maskachoska@yahoo.com>
+S:	Maintained
+F:	arch/mips/dts/econet,en7512*
+F:	board/econet/en7512/
+F:	configs/en7512_reference_defconfig
+F:	doc/board/econet/en7512.rst
+F:	include/configs/en7512.h
