@@ -29,6 +29,7 @@ Board-specific doc
    coreboot/index
    emcraft/index
    emulation/index
+   econet/index
    gateworks/index
    google/index
    highbank/index

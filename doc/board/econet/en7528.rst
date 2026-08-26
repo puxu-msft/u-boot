@@ -1,0 +1,66 @@
+.. SPDX-License-Identifier: GPL-2.0+
+
+EN7528 reference board
+======================
+
+This target provides the U-Boot port for the MIPS-based EcoNet/Airoha
+EN7528 SoC (MIPS 1004Kc, little-endian), used in many GPON/XPON ONT home
+gateways. It replaces the proprietary multi-stage TCBoot flow with the
+U-Boot TPL, SPL and U-Boot proper stages.
+
+Boot flow
+---------
+
+The boot ROM starts the TPL from the uncached flash window at
+``0xbfc00000``. The TPL enables the Front-End SRAM, initializes the serial
+port and reads the DDR calibration image and SPL through the early SFC
+reader. After DDR initialization, SPL loads ``u-boot.img`` into DRAM.
+
+Build
+-----
+
+The RAM / chainloaded build has no external dependency:
+
+.. code-block:: bash
+
+    make en7528_ram_defconfig
+    make CROSS_COMPILE=mipsel-linux-
+
+The reference board additionally packages the vendor DDR calibration blob
+(see below). Build it with ``BINMAN_ALLOW_MISSING=1`` when the blob is not
+present:
+
+.. code-block:: bash
+
+    make en7528_reference_defconfig
+    make CROSS_COMPILE=mipsel-linux- BINMAN_ALLOW_MISSING=1
+
+Defconfigs
+----------
+
+- ``en7528_reference_defconfig`` - reference board (DASAN H660GM-A)
+- ``en7528_ram_defconfig`` - RAM / chainloaded build
+
+DDR calibration blob
+--------------------
+
+The EN75xx TPL runs a small vendor DDR calibration stage that is not part
+of the U-Boot source tree. The TPL reads it from SPI-NAND at the DDR blob
+offset (``0x8000``) with the early SFC reader (see ``tpl/tpl.c``) and
+executes it from FE-SRAM before DRAM is available.
+
+Obtain the blob by extracting the FE-SRAM DDR calibration stage
+(``spram.bin``) from the device's vendor bootloader and flashing it at the
+DDR blob offset. The reference-board binman image expects it as
+``arch/mips/mach-en75xx/en7528_ddr.bin`` (``en7512_ddr.bin`` for the
+EN7512 reference board).
+
+Expected images:
+
+- EN7512 / EN7521: 20336 bytes,
+  sha256 792068a4573b20cb8c39cb27df06c45683c11034e6fd07da24ddf7084828faa5
+- EN7528: 23152 bytes,
+  sha256 c2ff94b25100d46c0f2d8b42ebeb887bd6bfd0d49cd1ba5df61eea84ac227540
+
+Providing a source implementation of the DDR2/DDR3 calibration to remove
+this runtime dependency is a known TODO.
