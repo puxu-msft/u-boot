@@ -1,0 +1,13 @@
+ECONET/AIROHA EN75XX
+M:	AK Sharma <maskachoska@yahoo.com>
+S:	Maintained
+F:	arch/mips/mach-en75xx/
+F:	arch/mips/dts/econet,en7528*
+F:	board/econet/en7528/
+F:	configs/en7528_*_defconfig
+F:	doc/board/econet/en7528.rst
+F:	doc/board/econet/index.rst
+F:	drivers/serial/serial_en75xx.c
+F:	include/configs/en7528.h
+N:	en75xx
+N:	en7528
