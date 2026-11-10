@@ -428,10 +428,14 @@ static int airoha_snand_read_data_from_fifo(struct airoha_snand_priv *priv,
 		int err;
 		u32 val;
 
-		/* 1. wait until dfifo is not empty */
+		/* 1. wait until the whole DFIFO status register reads 0.
+		 * Checking only bit0 passes while the transfer is still in
+		 * flight (bit0 is usually 0 then), so the read returns a
+		 * premature byte. The kernel driver carries the same fix.
+		 */
 		err = regmap_read_poll_timeout(priv->regmap_ctrl,
 					       REG_SPI_CTRL_DFIFO_EMPTY, val,
-					       !(val & SPI_CTRL_DFIFO_EMPTY),
+					       !val,
 					       0, 250 * USEC_PER_MSEC);
 		if (err)
 			return err;
