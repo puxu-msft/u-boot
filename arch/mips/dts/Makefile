@@ -42,3 +42,5 @@ include $(srctree)/scripts/Makefile.dts
 
 # Add any required device tree compiler flags here
 DTC_FLAGS +=
+
+dtb-$(CONFIG_ARCH_EN75XX) += econet,gs2107.dtb

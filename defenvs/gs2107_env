@@ -1,0 +1,31 @@
+serverip=192.168.21.2
+tftpdstp=6969
+ncip=192.168.21.2
+ncoutport=6666
+ncinport=6666
+ipaddr=192.168.21.7
+netmask=255.255.255.0
+gatewayip=192.168.21.1
+ethaddr=b4:ba:12:5c:41:a0
+bootdelay=3
+bootretry=5
+bootlimit=3
+bootcount=0
+upgrade_available=1
+bootok=0
+recovery=0
+loadaddr=0x82000000
+bootfile=gs2107/boot.scr
+kernel_off=0x480000
+kernel_size=0x800000
+rootfs_off=0xc80000
+rootfs_size=0x2000000
+bootargs_base=console=ttyS0,115200
+bootcmd=run gs_boot
+altbootcmd=run gs_fallback
+gs_boot=if test "${recovery}" = "1"; then run gs_recovery; else run gs_net_boot; run gs_usb_boot; run gs_nand_boot; run gs_recovery; fi
+gs_net_boot=setenv ipaddr 192.168.21.7; setenv netmask 255.255.255.0; setenv gatewayip 192.168.21.1; setenv serverip 192.168.21.2; setenv tftpdstp 6969; setenv autoload no; setenv ncip 192.168.21.2; setenv ncoutport 6666; setenv stdout serial,netconsole; if tftpboot ${loadaddr} ${serverip}:${bootfile}; then source ${loadaddr}; fi
+gs_usb_boot=usb start; if fatload usb 0:1 ${loadaddr} gs2107/boot.scr; then source ${loadaddr}; fi; if ext4load usb 0:1 ${loadaddr} gs2107/boot.scr; then source ${loadaddr}; fi
+gs_nand_boot=if mtd read spi-nand0 ${loadaddr} ${kernel_off} ${kernel_size}; then setenv bootargs "${bootargs_base} root=/dev/mtdblock4 rootfstype=squashfs rootwait"; bootm ${loadaddr}; fi
+gs_fallback=setenv recovery 1; setenv bootcount 0; saveenv; run gs_recovery
+gs_recovery=echo "GS2107 recovery: NAND/network/USB"; run gs_nand_boot; run gs_net_boot; run gs_usb_boot
