@@ -1,0 +1,6 @@
+CM201-2 BOARD
+S: Maintained
+F: board/cmcc/cm201-2
+F: arch/arm/dts/hi3798mv300-cm201-2.dts
+F: arch/arm/dts/hi3798mv300-cm201-2-u-boot.dtsi
+F: configs/cm201-2_defconfig

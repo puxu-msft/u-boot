@@ -1,0 +1,12 @@
+if TARGET_CM201_2
+
+config SYS_BOARD
+	default "cm201-2"
+
+config SYS_VENDOR
+	default "cmcc"
+
+config SYS_SOC
+	default "hi3798mv200"
+
+endif

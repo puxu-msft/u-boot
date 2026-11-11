@@ -1,0 +1,70 @@
+// SPDX-License-Identifier: GPL-2.0+
+/*
+ * CM201-2 的 U-Boot 补充：用固定时钟顶替 U-Boot 没有的 CRG 时钟驱动，CRG 复位位经 HiSilicon reset 驱动操作。
+ *
+ * 这里每个固定速率都必须与 board_init() 在 CRG 中设置（或保留）的值一致；复位 cell 的格式是 CRG 块内的 <offset bit polarity>。
+ */
+
+#include "hi3798mv200-u-boot.dtsi"
+
+/ {
+	/* PERI_CRG40 mux 1（50 MHz），由 board_init() 设置。 */
+	emmc_ciu_clk: clock-emmc-ciu {
+		compatible = "fixed-clock";
+		#clock-cells = <0>;
+		clock-frequency = <50000000>;
+	};
+
+	/* 供给 eMMC BIU 与 FEMAC 接口的 AHB 时钟。 */
+	ahb_clk: clock-ahb {
+		compatible = "fixed-clock";
+		#clock-cells = <0>;
+		clock-frequency = <200000000>;
+	};
+
+	/* FEMAC 核心时钟，mux 保持厂商 fastboot 的设置。 */
+	femac_clk: clock-femac {
+		compatible = "fixed-clock";
+		#clock-cells = <0>;
+		clock-frequency = <54000000>;
+	};
+
+	fephy_clk: clock-fephy {
+		compatible = "fixed-clock";
+		#clock-cells = <0>;
+		clock-frequency = <25000000>;
+	};
+
+	uart_clk: clock-uart {
+		compatible = "fixed-clock";
+		#clock-cells = <0>;
+		clock-frequency = <75000000>;
+	};
+};
+
+&soc {
+	crg_rst: reset-controller@8a22000 {
+		compatible = "hisilicon,hi3798cv200-reset";
+		reg = <0x8a22000 0x1000>;
+		#reset-cells = <3>;
+	};
+};
+
+&emmc {
+	clocks = <&emmc_ciu_clk>, <&ahb_clk>;
+	clock-names = "ciu", "biu";
+	resets = <&crg_rst 0xa0 4 ASSERT_SET>;
+	reset-names = "reset";
+};
+
+&femac {
+	clocks = <&femac_clk>, <&ahb_clk>, <&fephy_clk>;
+	clock-names = "mac", "bus", "phy";
+	resets = <&crg_rst 0xd0 3 ASSERT_SET>, <&crg_rst 0x388 4 ASSERT_SET>;
+	reset-names = "mac", "phy";
+};
+
+&uart0 {
+	clocks = <&uart_clk>;
+	clock-names = "apb_pclk";
+};

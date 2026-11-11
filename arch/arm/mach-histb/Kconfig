@@ -30,10 +30,21 @@ config TARGET_HC2910_2AGHD05
 	  - 3 LED - power, Wifi, Lock(?)
 	  - 1x Fast Ethernet Controller, 1x GBe Ethernet Controller
 
+config TARGET_CM201_2
+	bool "China Mobile CM201-2 (Hi3798MV300)"
+	help
+	  支持 CM201-2 机顶盒。本板配置：
+	  - Hisilicon Hi3798MV300 SoC（4xCortex-A53）
+	  - 1GiB DRAM
+	  - 8GiB eMMC
+	  - 1 个 Fast Ethernet Controller，接内置 FE PHY
+	  U-Boot 作为 TF-A BL31 的 BL33 运行，PSCI 由 BL31 提供。
+
 endchoice
 
 endif
 
 source "board/skyworth/hc2910-2aghd05/Kconfig"
+source "board/cmcc/cm201-2/Kconfig"
 
 endif
