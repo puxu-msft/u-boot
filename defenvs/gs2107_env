@@ -7,7 +7,7 @@ ipaddr=192.168.21.7
 netmask=255.255.255.0
 gatewayip=192.168.21.1
 ethaddr=b4:ba:12:5c:41:a0
-bootdelay=3
+bootdelay=1
 bootretry=5
 bootlimit=3
 bootcount=0
@@ -24,7 +24,7 @@ bootargs_base=console=ttyS0,115200
 bootcmd=run gs_boot
 altbootcmd=run gs_fallback
 gs_boot=if test "${recovery}" = "1"; then run gs_recovery; else run gs_net_boot; run gs_usb_boot; run gs_nand_boot; run gs_recovery; fi
-gs_net_boot=setenv ipaddr 192.168.21.7; setenv netmask 255.255.255.0; setenv gatewayip 192.168.21.1; setenv serverip 192.168.21.2; setenv tftpdstp 6969; setenv autoload no; setenv ncip 192.168.21.2; setenv ncoutport 6666; setenv stdout serial,netconsole; if tftpboot ${loadaddr} ${serverip}:${bootfile}; then source ${loadaddr}; fi
+gs_net_boot=setenv ipaddr 192.168.21.7; setenv netmask 255.255.255.0; setenv gatewayip 192.168.21.1; setenv serverip 192.168.21.2; setenv tftpdstp 6969; setenv autoload no; setenv ncip 192.168.21.2; setenv ncoutport 6666; setenv stdout serial,netconsole; setenv tftptimeout 1000; setenv tftptimeoutcountmax 2; if tftpboot ${loadaddr} ${serverip}:${bootfile}; then setenv tftptimeout 5000; setenv tftptimeoutcountmax 10; source ${loadaddr}; fi; setenv tftptimeout 5000; setenv tftptimeoutcountmax 10
 gs_usb_boot=usb start; if fatload usb 0:1 ${loadaddr} gs2107/boot.scr; then source ${loadaddr}; fi; if ext4load usb 0:1 ${loadaddr} gs2107/boot.scr; then source ${loadaddr}; fi
 gs_nand_boot=if mtd read spi-nand0 ${loadaddr} ${kernel_off} ${kernel_size}; then setenv bootargs "${bootargs_base} root=/dev/mtdblock4 rootfstype=squashfs rootwait"; bootm ${loadaddr}; fi
 gs_fallback=setenv recovery 1; setenv bootcount 0; saveenv; run gs_recovery
