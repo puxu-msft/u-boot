@@ -473,7 +473,7 @@ static int do_mtd_io(struct cmd_tbl *cmdtp, int flag, int argc,
 	u64 start_off, off, len, remaining, default_len, speed, user_addr = 0;
 	unsigned long bench_start, bench_end;
 	struct mtd_oob_ops io_op = {};
-	uint npages;
+	uint npages, corrected = 0;
 	const char *cmd = argv[0];
 	struct mtd_info *mtd;
 	u32 oob_len;
@@ -606,6 +606,16 @@ static int do_mtd_io(struct cmd_tbl *cmdtp, int flag, int argc,
 			ret = mtd_special_write_oob(mtd, off, &io_op,
 						    write_empty_pages, woob);
 
+		/* -EUCLEAN: ECC corrected the data, which is valid */
+		if (read && mtd_is_bitflip(ret)) {
+			corrected++;
+			ret = 0;
+		}
+
+		/* A successful call that moved nothing would loop forever */
+		if (!ret && !io_op.retlen)
+			ret = -EIO;
+
 		if (ret) {
 			printf("Failure while %s at offset 0x%llx\n",
 			       read ? "reading" : "writing", off);
@@ -617,6 +627,9 @@ static int do_mtd_io(struct cmd_tbl *cmdtp, int flag, int argc,
 		io_op.datbuf += io_op.retlen;
 		io_op.oobbuf += io_op.oobretlen;
 	}
+
+	if (corrected)
+		printf("Corrected bitflips in %u read(s)\n", corrected);
 
 	if (benchmark && bench_start) {
 		bench_end = timer_get_us();
