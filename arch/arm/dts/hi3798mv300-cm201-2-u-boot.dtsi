@@ -57,11 +57,14 @@
 	reset-names = "reset";
 };
 
+/*
+ * 不写 PHY 复位：厂商 fastboot 刚为它自己的 TFTP 阶段用过 FE PHY，U-Boot 启动时链路已经建立。打一次 PHY 复位脉冲（CRG 0x388 bit 4）会让主机探测在发出 ARP 之前先等一次新的自动协商，约 2 s。
+ */
 &femac {
 	clocks = <&femac_clk>, <&ahb_clk>, <&fephy_clk>;
 	clock-names = "mac", "bus", "phy";
-	resets = <&crg_rst 0xd0 3 ASSERT_SET>, <&crg_rst 0x388 4 ASSERT_SET>;
-	reset-names = "mac", "phy";
+	resets = <&crg_rst 0xd0 3 ASSERT_SET>;
+	reset-names = "mac";
 };
 
 &uart0 {
