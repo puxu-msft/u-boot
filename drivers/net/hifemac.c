@@ -464,19 +464,19 @@ static int hisi_femac_of_to_plat(struct udevice *dev)
 		return log_msg_ret("rst", PTR_ERR(priv->mac_rst));
 	}
 
-	priv->phy_rst = devm_reset_control_get(dev, "phy");
-	if (IS_ERR(priv->phy_rst)) {
-		dev_err(dev, "Failed to get PHY reset %ld\n", PTR_ERR(priv->phy_rst));
-		return log_msg_ret("rst", PTR_ERR(priv->phy_rst));
-	}
-
-	ret = dev_read_u32_array(dev,
-				 PHY_RESET_DELAYS_PROPERTY,
-				 priv->phy_reset_delays,
-				 DELAYS_NUM);
-	if (ret < 0) {
-		dev_err(dev, "Failed to get PHY reset delays %d\n", ret);
-		return log_msg_ret("rst", ret);
+	/*
+	 * PHY 复位是可选的：没有它时 PHY 保留更早启动阶段协商好的链路，第一次传输就不用等一次新的自动协商。
+	 */
+	priv->phy_rst = devm_reset_control_get_optional(dev, "phy");
+	if (priv->phy_rst) {
+		ret = dev_read_u32_array(dev,
+					 PHY_RESET_DELAYS_PROPERTY,
+					 priv->phy_reset_delays,
+					 DELAYS_NUM);
+		if (ret < 0) {
+			dev_err(dev, "Failed to get PHY reset delays %d\n", ret);
+			return log_msg_ret("rst", ret);
+		}
 	}
 
 	priv->mac_reset_delay = dev_read_u32_default(dev,
@@ -591,10 +591,12 @@ static int hisi_femac_probe(struct udevice *dev)
 	}
 
 	// Reset PHY
-	ret = hisi_femac_phy_reset(priv);
-	if (ret < 0) {
-		dev_err(dev, "Failed to reset PHY: %d\n", ret);
-		return log_msg_ret("net", ret);
+	if (priv->phy_rst) {
+		ret = hisi_femac_phy_reset(priv);
+		if (ret < 0) {
+			dev_err(dev, "Failed to reset PHY: %d\n", ret);
+			return log_msg_ret("net", ret);
+		}
 	}
 
 	// Connect to PHY
