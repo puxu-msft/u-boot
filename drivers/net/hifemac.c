@@ -290,6 +290,8 @@ static int hisi_femac_set_hw_mac_addr(struct udevice *dev)
 	return 0;
 }
 
+static void hisi_femac_stop(struct udevice *dev);
+
 static int hisi_femac_start(struct udevice *dev)
 {
 	int ret;
@@ -302,12 +304,13 @@ static int hisi_femac_start(struct udevice *dev)
 	ret = phy_startup(priv->phy);
 	if (ret) {
 		dev_err(dev, "Failed to startup phy: %d\n", ret);
-		return log_msg_ret("phy", ret);
+		goto err_stop;
 	}
 
 	if (!priv->phy->link) {
 		debug("%s: link down\n", __func__);
-		return -ENODEV;
+		ret = -ENODEV;
+		goto err_stop;
 	}
 
 	hisi_femac_adjust_link(dev);
@@ -316,6 +319,13 @@ static int hisi_femac_start(struct udevice *dev)
 	hisi_femac_irq_enable(priv, IRQ_ENA_ALL | IRQ_ENA_PORT0 | DEF_INT_MASK);
 
 	return 0;
+
+err_stop:
+	/*
+	 * RX 队列里已经放了 net_rx_packets[]：start 失败不会把设备标为 running，eth_halt() 因此不会停掉它，链路建立后到达的帧会被 DMA 写进下一阶段所有的内存（在 Linux 中表现为页表损坏）。
+	 */
+	hisi_femac_stop(dev);
+	return log_msg_ret("start", ret);
 }
 
 static int hisi_femac_send(struct udevice *dev, void *packet, int length)
