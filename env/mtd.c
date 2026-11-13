@@ -46,7 +46,8 @@ static int env_mtd_read_buf(struct mtd_info *mtd, u32 offset, void *buf, int len
 			continue;
 		}
 		ret = mtd_read(mtd, offset, mtd->writesize, &ret_len, tmp);
-		if (ret)
+		/* -EUCLEAN: ECC corrected the data, which is valid; the environment CRC still guards the content */
+		if (ret && !mtd_is_bitflip(ret))
 			return ret;
 		tmp += ret_len;
 		offset += ret_len;
@@ -102,7 +103,7 @@ static int env_mtd_save(void)
 
 			ret = mtd_read(mtd_env, offset, mtd_env->writesize,
 				       &ret_len, tmp);
-			if (ret)
+			if (ret && !mtd_is_bitflip(ret))
 				goto done;
 
 			tmp += ret_len;
@@ -260,7 +261,7 @@ static int env_mtd_erase(void)
 
 			ret = mtd_read(mtd_env, offset, mtd_env->writesize,
 				       &ret_len, tmp);
-			if (ret)
+			if (ret && !mtd_is_bitflip(ret))
 				goto done;
 
 			tmp += ret_len;
