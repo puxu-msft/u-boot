@@ -18,6 +18,9 @@
 #define BWET_FR_ECC 0xb0
 #define BWET_FR_ECC_ON_DIE BIT(4)
 
+/* ECC status, status register bits 5:4; no register with the exact bitflip count is known. There is no datasheet, and only 10 = uncorrectable is backed by evidence: the stock EcoNet driver fails a read only on (status & 0x30) == 0x20. The meaning of 11 is unknown. The stock driver uses the data, but its table applies the same check to W25N01GV, MX35LF1GE4AB and F50L1G41LB, whose Linux and U-Boot drivers fail the read on 11, while GD5FxGQ4xA, PN26G0xA, W25N0xKV and the Linux HYF1GQ4UDACAE driver use 11 for their highest corrected class. Same decoding as the Linux driver. */
+#define BWET_STATUS_ECC_11 (3 << 4)
+
 static SPINAND_OP_VARIANTS(read_cache_variants,
 		SPINAND_PAGE_READ_FROM_CACHE_1S_1S_1S_OP(0, 1, NULL, 0, 0),
 		SPINAND_PAGE_READ_FROM_CACHE_FAST_1S_1S_1S_OP(0, 1, NULL, 0, 0));
@@ -68,6 +71,34 @@ static const struct mtd_ooblayout_ops bwet_ooblayout = {
 	.rfree = bwet_ooblayout_free,
 };
 
+static int bwet08u_ecc_get_status(struct spinand_device *spinand, u8 status)
+{
+	struct nand_device *nand = spinand_to_nand(spinand);
+	static bool status_11_seen;
+
+	switch (status & STATUS_ECC_MASK) {
+	case STATUS_ECC_NO_BITFLIPS:
+		return 0;
+
+	case STATUS_ECC_UNCOR_ERROR:
+		return -EBADMSG;
+
+	case STATUS_ECC_HAS_BITFLIPS:
+		/* Corrected, count unknown. Stay below mtd->bitflip_threshold (3/4 of the strength): mtd_read() turns reaching it into -EUCLEAN, and Linux into a UBI scrub or a permanent BMT remap. Both values are relative to the strength, so they stay on their side of the threshold while NAND_ECCREQ is a placeholder. */
+		return nanddev_get_ecc_conf(nand)->strength / 2;
+
+	case BWET_STATUS_ECC_11:
+		/* Meaning unknown (see above). Like the stock driver, use the data; like the Linux HYF1GQ4UDACAE driver for its refresh code, report the full strength. Printed once per boot (the console is the serial port) so that real occurrences can be checked against the data. */
+		if (!status_11_seen) {
+			status_11_seen = true;
+			printf("BWET08U: ECC status 11 (meaning unknown), data used as corrected\n");
+		}
+		return nanddev_get_ecc_conf(nand)->strength;
+	}
+
+	return -EINVAL;
+}
+
 static const struct spinand_info bwet_spinand_table[] = {
 	SPINAND_INFO("BWET08U",
 		     SPINAND_ID(SPINAND_READID_METHOD_OPCODE_ADDR, 0xb2),
@@ -78,7 +109,7 @@ static const struct spinand_info bwet_spinand_table[] = {
 					      &update_cache_variants),
 		     0,
 		     SPINAND_CONFIGURE_CHIP(bwet08u_cfg),
-		     SPINAND_ECCINFO(&bwet_ooblayout, NULL)),
+		     SPINAND_ECCINFO(&bwet_ooblayout, bwet08u_ecc_get_status)),
 };
 
 static const struct spinand_manufacturer_ops bwet_spinand_manuf_ops = {
