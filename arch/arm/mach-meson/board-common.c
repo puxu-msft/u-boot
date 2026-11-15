@@ -19,6 +19,8 @@
 #include <asm/armv8/mmu.h>
 #include <asm/unaligned.h>
 #include <efi_loader.h>
+#include <fdt_support.h>
+#include <fdtdec.h>
 #include <u-boot/crc.h>
 
 #include <asm/psci.h>
@@ -64,13 +66,68 @@ int ft_board_setup(void *blob, struct bd_info *bd)
 	return meson_ft_board_setup(blob, bd);
 }
 
+/*
+ * DT 的 /reserved-memory 已经把 [start, start + size) 整段交给某个启用的子节点时返回 true，两种情形：
+ * - 静态区：reg 覆盖这段，且节点不带 reusable。reusable 允许内核把这段借给别的用途（静态 CMA 就是交给伙伴系统放可迁移页），不算保留。
+ * - 动态池：alloc-ranges 恰好一段、覆盖这段，且池的 size 等于这段的长度，池只能整段落在这里。alloc-ranges 有多段时 Linux 可以把池分在别段，这段就没人保留。
+ * 这时再加 /memreserve/ 是多余的，对动态池还有害：Linux 先按 /memreserve/ 占住内存，再在 alloc-ranges 里给池分配，区间已被占就分配失败。例如 Amlogic 厂商内核 DT 的 linux,secmon 是 alloc-ranges = <0x05000000 0x400000>、size = 0x400000 的 shared-dma-pool，正好压在 BL31 上，secmon 驱动要从它分配与安全世界的共享内存。
+ * 动态池带 reusable 时同样接受，这是为与厂商 BL33 一致：厂商的 rsvmem check 把 linux,secmon 改成单段 alloc-ranges = BL31 区、size 按 BL31 大小取整到 4 MiB，不加 /memreserve/，而这个池在厂商 DT 里是 reusable 的。代价是池被分配之前，这段可能暂放可迁移页。
+ * 子节点的 size 与 alloc-ranges 按 /reserved-memory 的 #address-cells/#size-cells 解析（reserved-memory 绑定要求它们与根节点相同）。
+ */
+static bool meson_fdt_rsvmem_covers(const void *fdt, u64 start, u64 size)
+{
+	const fdt32_t *p, *psize;
+	int parent, node, ac, sc, len, slen, i;
+	u64 end = start + size, base, length;
+
+	parent = fdt_path_offset(fdt, "/reserved-memory");
+	if (parent < 0)
+		return false;
+	ac = fdt_address_cells(fdt, parent);
+	sc = fdt_size_cells(fdt, parent);
+	if (ac < 1 || ac > 2 || sc < 1 || sc > 2)
+		return false;
+
+	fdt_for_each_subnode(node, fdt, parent) {
+		if (!fdtdec_get_is_enabled(fdt, node))
+			continue;
+
+		p = fdt_getprop(fdt, node, "reg", &len);
+		if (fdt_getprop(fdt, node, "reusable", NULL))
+			p = NULL;
+		for (i = 0; p && (i + ac + sc) * 4 <= len; i += ac + sc) {
+			base = fdt_read_number(p + i, ac);
+			length = fdt_read_number(p + i + ac, sc);
+			if (base <= start && end <= base + length)
+				return true;
+		}
+
+		psize = fdt_getprop(fdt, node, "size", &slen);
+		p = fdt_getprop(fdt, node, "alloc-ranges", &len);
+		if (!psize || slen != sc * 4 || !p || len != (ac + sc) * 4)
+			continue;
+		base = fdt_read_number(p, ac);
+		length = fdt_read_number(p + ac, sc);
+		if (base <= start && end <= base + length &&
+		    fdt_read_number(psize, sc) == length)
+			return true;
+	}
+
+	return false;
+}
+
 void meson_board_add_reserved_memory(void *fdt, u64 start, u64 size)
 {
 	int ret;
 
-	ret = fdt_add_mem_rsv(fdt, start, size);
-	if (ret)
-		printf("Could not reserve zone @ 0x%llx\n", start);
+	if (meson_fdt_rsvmem_covers(fdt, start, size)) {
+		debug("Zone @ 0x%llx already described by /reserved-memory\n",
+		      start);
+	} else {
+		ret = fdt_add_mem_rsv(fdt, start, size);
+		if (ret)
+			printf("Could not reserve zone @ 0x%llx\n", start);
+	}
 
 	if (IS_ENABLED(CONFIG_EFI_LOADER))
 		efi_add_memory_map(start, size, EFI_RESERVED_MEMORY_TYPE);
