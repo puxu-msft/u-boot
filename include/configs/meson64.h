@@ -61,8 +61,10 @@
  * will be attempted:
  * $ dfu-util -a 0 -D fitImage
  * $ dfu-util -a 0 -e
+ *
+ * 本头文件也被主机工具 tools/printinitialenv（u-boot-initial-env）以 USE_HOSTCC 编译，那里 CONFIG_IS_ENABLED(X) 取的是 CONFIG_TOOLS_X、恒为 0，所以用 IS_ENABLED(CONFIG_X)，两边的默认环境才一致。
  */
-#if CONFIG_IS_ENABLED(USB_GADGET) && CONFIG_IS_ENABLED(DFU_RAM)
+#if IS_ENABLED(CONFIG_USB_GADGET) && IS_ENABLED(CONFIG_DFU_RAM)
 	#define BOOTENV_DEV_USB_DFU(devtypeu, devtypel, instance) \
 		"bootcmd_usbdfu=" \
 			"if test \"${boot_source}\" = \"usb\"; then " \
