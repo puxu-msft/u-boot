@@ -151,15 +151,23 @@ phys_size_t env_get_bootm_size(void)
 phys_size_t env_get_bootm_mapsize(void)
 {
 	char *s = env_get("bootm_mapsize");
+	phys_size_t size;
 
 	if (s)
 		return simple_strtoull(s, NULL, 16);
 
 #if defined(CFG_SYS_BOOTMAPSZ)
-	return CFG_SYS_BOOTMAPSZ;
+	size = CFG_SYS_BOOTMAPSZ;
 #else
-	return env_get_bootm_size();
+	size = env_get_bootm_size();
 #endif
+#if defined(CONFIG_ARM64_AARCH32_BOOTMAPSZ) && !defined(CONFIG_XPL_BUILD)
+	/* 32 位 Arm 内核只能经 lowmem 访问 FDT 与 initrd，见 ARM64_AARCH32_BOOTMAPSZ */
+	if (images.os.arch == IH_ARCH_ARM)
+		size = min_t(phys_size_t, size, CONFIG_ARM64_AARCH32_BOOTMAPSZ);
+#endif
+
+	return size;
 }
 
 void memmove_wd(void *to, void *from, size_t len, ulong chunksz)

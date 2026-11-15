@@ -613,6 +613,16 @@ config ARM64_SUPPORT_AARCH32
 	help
 	  This ARM64 system supports AArch32 execution state.
 
+config ARM64_AARCH32_BOOTMAPSZ
+	hex "引导 AArch32 内核时 bootmap 的上限"
+	depends on ARM64_SUPPORT_AARCH32
+	depends on CMD_BOOTM || CMD_BOOTZ || CMD_BOOTI
+	default 0x10000000
+	help
+	  32 位 Arm 内核只能经低端内存（lowmem）的线性映射访问 FDT 与 initrd，而 ARM64 U-Boot 默认把它们重定位到内存顶端。引导 AArch32 内核（images.os.arch 为 IH_ARCH_ARM）时，若没有设 bootm_mapsize 环境变量，bootmap 取 bootm_size 与本值中较小者（自 bootm_low 起算），FDT 与 initrd 就落在这个窗口顶端。fdt_high、initrd_high 仍优先。
+
+	  默认 256 MiB：低于常见 32 位内核配置的 lowmem（VMSPLIT_3G 约 760 MiB），也高于 zImage 自解压用到的区域（解压后的内核加 zImage 自身，一般几十 MiB）。窗口内大多是保留区的板子会在重定位 FDT 时报 “device tree - allocation error”，这时调大本值或设 bootm_mapsize。
+
 config IPROC
 	bool
 
