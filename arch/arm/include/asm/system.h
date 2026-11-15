@@ -132,6 +132,15 @@
 #define SCTLR_EL1_ALIGN_DIS	(0 << 1)  /* Alignment check disabled         */
 #define SCTLR_EL1_MMU_DIS	(0)       /* MMU disabled                     */
 
+/*
+ * EL1 为 AArch32 时 SCTLR_EL1[31:0] 就是 AArch32 的 SCTLR，位义与上面的 AArch64 布局不同（bit 5 是 CP15BEN、bit 20 是 UWXN、bit 28/29 是 TRE/AFE），进 AArch32 EL1 前按本组重写。32 位 Linux 只改它认识的位：Linux v5.6 之前的解压器在置 CP15BEN 前就执行 CP15 屏障，nTWE/nTWI 与 UWXN 一直保留到用户态。取值 0x00c50878，与 Amlogic 厂商 BL33 的 jump_to_a32_kernel 相同。
+ */
+#define SCTLR_A32_RES1		(3 << 22 | 1 << 11 | 3 << 3) /* RES1 */
+#define SCTLR_A32_BIT6		(1 << 6)  /* ARMv7 的 RAO/SBOP 位，ARMv8 为 RES0（有 FEAT_LSE2 时是 nAA）；Linux 的 v7 SCTLR 设置与 KVM 的 32 位来宾复位值都置 1，这里同样置 1 */
+#define SCTLR_A32_NTWE_EN	(1 << 18) /* EL0 的 WFE 不陷入                */
+#define SCTLR_A32_NTWI_EN	(1 << 16) /* EL0 的 WFI 不陷入                */
+#define SCTLR_A32_CP15BEN_EN	(1 << 5)  /* 允许 CP15 屏障指令               */
+
 #ifndef __ASSEMBLY__
 
 struct pt_regs;

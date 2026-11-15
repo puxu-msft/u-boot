@@ -310,6 +310,14 @@ lr	.req	x30
 	eret
 
 1:
+	/*
+	 * 上面按 AArch64 布局写的 SCTLR_EL1 在 AArch32 下位义不同：CP15BEN=0 会让 32 位解压器的 CP15 屏障指令未定义，nTWE/nTWI=0 会让用户态 WFE/WFI 陷入。按 AArch32 布局重写，MMU、缓存、对齐检查、TRE/AFE、EE、TE 全关
+	 */
+	ldr	\tmp, =(SCTLR_A32_RES1 | SCTLR_A32_BIT6 |\
+			SCTLR_A32_NTWE_EN | SCTLR_A32_NTWI_EN |\
+			SCTLR_A32_CP15BEN_EN)
+	msr	sctlr_el1, \tmp
+
 	/* Initialize HCR_EL2 */
 	ldr	\tmp, =(HCR_EL2_RW_AARCH32 | HCR_EL2_HCD_DIS)
 	msr	hcr_el2, \tmp
