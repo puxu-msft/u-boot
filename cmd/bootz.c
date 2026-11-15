@@ -96,6 +96,8 @@ int do_bootz(struct cmd_tbl *cmdtp, int flag, int argc, char *const argv[])
 	bootm_disable_interrupts();
 
 	images.os.os = IH_OS_LINUX;
+	/* zImage 只装 32 位 Arm 内核：ARM64 U-Boot 据此以 AArch32 交接 */
+	images.os.arch = IH_ARCH_ARM;
 
 	bootm_init(&bmi);
 	if (argc)
