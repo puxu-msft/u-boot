@@ -539,6 +539,13 @@ config CMD_ABOOTIMG
 
 	  See doc/android/boot-image.rst for details.
 
+config CMD_AMLDTB
+	bool "amldtb - select a DTB from an Amlogic multi-DTB image"
+	depends on OF_LIBFDT
+	select GZIP
+	help
+	  从 Amlogic 厂商 DTB 镜像里按名字（默认取 env aml_dt，与厂商 u-boot 相同）选出一份 FDT 复制到指定地址，并把 filesize 设为它的大小；-m 给出目的区容量时，FDT 超出即报错、不写。输入可以是 Android boot image（取 second 区）、eMMC reserved 分区的 256 KiB DTB 槽（校验尾部校验和）、gzip（校验 CRC32 与长度）、AML_ 多 DTB 容器或单个 FDT，逐层剥开；任何一层校验不过都拒绝。
+
 config CMD_CEDIT
 	bool "cedit - Configuration editor"
 	depends on CEDIT
