@@ -211,19 +211,18 @@ static int boot_get_kernel(const char *addr_fit, struct bootm_headers *images,
 	case IMAGE_FORMAT_ANDROID: {
 		int ret;
 
+		/*
+		 * 启动映像就是 bootm 参数所指、刚认出 Android 格式的这份；abootimg 只补充参数给不出的 vendor_boot（头版本 3 起）
+		 */
 		boot_img = buf;
 		vendor_boot_img = NULL;
-		if (IS_ENABLED(CONFIG_CMD_ABOOTIMG)) {
-			boot_img = map_sysmem(get_abootimg_addr(), 0);
+		if (IS_ENABLED(CONFIG_CMD_ABOOTIMG))
 			vendor_boot_img = map_sysmem(get_avendor_bootimg_addr(), 0);
-		}
 		printf("## Booting Android Image at 0x%08lx ...\n", img_addr);
 		ret = android_image_get_kernel(boot_img, vendor_boot_img,
 					       images->verify, os_data, os_len);
-		if (IS_ENABLED(CONFIG_CMD_ABOOTIMG)) {
+		if (IS_ENABLED(CONFIG_CMD_ABOOTIMG))
 			unmap_sysmem(vendor_boot_img);
-			unmap_sysmem(boot_img);
-		}
 		if (ret)
 			return ret;
 		break;
@@ -392,10 +391,8 @@ static int bootm_find_os(const char *cmd_name, const char *addr_fit)
 	case IMAGE_FORMAT_ANDROID:
 		boot_img = os_hdr;
 		vendor_boot_img = NULL;
-		if (IS_ENABLED(CONFIG_CMD_ABOOTIMG)) {
-			boot_img = map_sysmem(get_abootimg_addr(), 0);
+		if (IS_ENABLED(CONFIG_CMD_ABOOTIMG))
 			vendor_boot_img = map_sysmem(get_avendor_bootimg_addr(), 0);
-		}
 		images.os.type = IH_TYPE_KERNEL;
 		images.os.comp = android_image_get_kcomp(boot_img, vendor_boot_img);
 		images.os.os = IH_OS_LINUX;
@@ -403,10 +400,8 @@ static int bootm_find_os(const char *cmd_name, const char *addr_fit)
 		images.os.load = android_image_get_kload(boot_img, vendor_boot_img);
 		images.ep = images.os.load;
 		ep_found = true;
-		if (IS_ENABLED(CONFIG_CMD_ABOOTIMG)) {
+		if (IS_ENABLED(CONFIG_CMD_ABOOTIMG))
 			unmap_sysmem(vendor_boot_img);
-			unmap_sysmem(boot_img);
-		}
 		break;
 #endif
 	default:
