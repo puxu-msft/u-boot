@@ -49,6 +49,19 @@ config SPL_MAC_PARTITION
 	default y if MAC_PARTITION
 	select SPL_PARTITIONS
 
+config AML_PARTITION
+	bool "Enable Amlogic MPT partition table"
+	select PARTITIONS
+	help
+	  识别 Amlogic 厂商 u-boot 写在 eMMC reserved 分区起点的私有分区表 MPT（魔数 "MPT"，版本 01.00.00 或 01.02.00，至多 32 项，带名字）。厂商 eMMC 布局的扇区 0 往往没有 MBR/GPT，开启后 part list、part start/size 与 <dev>#<名字> 形式的分区引用才能用厂商分区名。魔数、版本、项数、校验和、每项的对齐、越界与重叠任一项不过就整张表不认，原因每块盘只打印一次。GPT 与 DOS（MBR）都优先于 MPT：盘上同时有有效 MBR 与残留的 MPT 时按 MBR 认。
+
+config AML_PARTITION_OFFSET
+	hex "Byte offset of the Amlogic MPT on the block device"
+	depends on AML_PARTITION
+	default 0xc00000
+	help
+	  MPT 的字节偏移，即 reserved 分区起点：厂商 _calculate_offset 在 4 MiB 的 bootloader 之后留 MMC_BOOT_PARTITION_RESERVED 的间隙。联通 M12（SM1）出厂表实测是 12 MiB；khadas-vims v2015.01（GXL）厂商树的间隙是 32 MiB，即 36 MiB（0x2400000）。必须是块大小的整数倍。
+
 config TEGRA_PARTITION
 	bool "Enable Nvidia Tegra partition table"
 	select PARTITIONS

@@ -313,6 +313,7 @@ void part_init(struct blk_desc *desc)
 static void print_part_header(const char *type, struct blk_desc *desc)
 {
 #if CONFIG_IS_ENABLED(MAC_PARTITION) || \
+	CONFIG_IS_ENABLED(AML_PARTITION) || \
 	CONFIG_IS_ENABLED(DOS_PARTITION) || \
 	CONFIG_IS_ENABLED(ISO_PARTITION) || \
 	CONFIG_IS_ENABLED(AMIGA_PARTITION) || \

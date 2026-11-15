@@ -86,6 +86,9 @@ obj-y += of_extra.o
 obj-$(CONFIG_OSD) += osd.o
 obj-$(CONFIG_VIDEO) += panel.o
 obj-$(CONFIG_EFI_PARTITION) += part.o
+ifeq ($(CONFIG_BLKMAP),y)
+obj-$(CONFIG_AML_PARTITION) += part_aml.o
+endif
 obj-$(CONFIG_PCI) += pci.o
 obj-$(CONFIG_P2SB) += p2sb.o
 obj-$(CONFIG_PCI_ENDPOINT) += pci_ep.o
