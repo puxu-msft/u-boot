@@ -1033,13 +1033,29 @@ static inline int image_check_type(const struct legacy_img_hdr *hdr, uint8_t typ
 	return (image_get_type(hdr) == type);
 }
 
+/**
+ * image_arch_compatible() - 判断 U-Boot 能否处理声明为某架构的映像
+ *
+ * 传统格式与 FIT 共用这一条规则。
+ *
+ * @want:	U-Boot 要求的架构（通常是 IH_ARCH_DEFAULT）
+ * @got:	映像声明的架构
+ * Return: true 表示可以：架构相同；32 位 x86 处理 x86_64 映像；开 ARM64_SUPPORT_AARCH32 时 64 位 Arm 处理 32 位 Arm 映像（内核交接见 armv8_switch_to_el2()）
+ */
+static inline bool image_arch_compatible(uint8_t want, uint8_t got)
+{
+	return got == want ||
+	       (want == IH_ARCH_I386 && got == IH_ARCH_X86_64) ||
+	       (want == IH_ARCH_ARM64 && got == IH_ARCH_ARM &&
+		IS_ENABLED(CONFIG_ARM64_SUPPORT_AARCH32));
+}
+
 static inline int image_check_arch(const struct legacy_img_hdr *hdr, uint8_t arch)
 {
 	/* Let's assume that sandbox can load any architecture */
 	if (!tools_build() && IS_ENABLED(CONFIG_SANDBOX))
 		return true;
-	return (image_get_arch(hdr) == arch) ||
-		(image_get_arch(hdr) == IH_ARCH_ARM && arch == IH_ARCH_ARM64);
+	return image_arch_compatible(arch, image_get_arch(hdr));
 }
 
 static inline int image_check_os(const struct legacy_img_hdr *hdr, uint8_t os)

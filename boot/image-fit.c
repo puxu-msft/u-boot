@@ -1609,21 +1609,14 @@ int fit_image_check_os(const void *fit, int noffset, uint8_t os)
 int fit_image_check_arch(const void *fit, int noffset, uint8_t arch)
 {
 	uint8_t image_arch;
-	int aarch32_support = 0;
 
 	/* Let's assume that sandbox can load any architecture */
 	if (IS_ENABLED(CONFIG_SANDBOX))
 		return true;
 
-	if (IS_ENABLED(CONFIG_ARM64_SUPPORT_AARCH32))
-		aarch32_support = 1;
-
 	if (fit_image_get_arch(fit, noffset, &image_arch))
 		return 0;
-	return (arch == image_arch) ||
-		(arch == IH_ARCH_I386 && image_arch == IH_ARCH_X86_64) ||
-		(arch == IH_ARCH_ARM64 && image_arch == IH_ARCH_ARM &&
-		 aarch32_support);
+	return image_arch_compatible(arch, image_arch);
 }
 
 /**
