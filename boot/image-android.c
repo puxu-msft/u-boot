@@ -357,13 +357,44 @@ static ulong android_image_get_kernel_addr(struct andr_image_data *img_data,
 	return img_data->kernel_addr;
 }
 
+int android_image_get_kernel_info(const void *hdr, const void *vendor_boot_img,
+				  bool verify, struct image_kernel_info *info)
+{
+	struct andr_image_data img_data;
+	int ret;
+
+	if (!android_image_get_data(hdr, vendor_boot_img, &img_data))
+		return -EINVAL;
+
+	ret = image_probe_kernel(img_data.kernel_ptr, img_data.kernel_size,
+				 verify, info);
+	if (ret && ret != -ENOEXEC)
+		return ret;
+	if (info->arch != IH_ARCH_INVALID && !IS_ENABLED(CONFIG_SANDBOX) &&
+	    !image_arch_compatible(IH_ARCH_DEFAULT, info->arch)) {
+		printf("Unsupported Architecture 0x%x\n", info->arch);
+		return -EPROTONOSUPPORT;
+	}
+
+	/*
+	 * 套着 uImage 的内核（Amlogic 等厂商的格式）按 uImage 头的 load/ep 放置，启动映像头的 kernel_addr 只用于裸内核。
+	 * 这与厂商 u-boot 不同。联通 M12 的厂商 u-boot 把 boot.img 读到 kernel_addr 0x01080000，内核仍按 kernel_addr 放（zImage 从 0x01080840 memmove 到 0x01080000），ramdisk 不拷到 ramdisk_addr，直接从映像里重定位到 initrd_high 之下；主线对头版本 0–2 先把 ramdisk 拷到 ramdisk_addr 0x01000000，内核再放 0x01080000 就压住 ramdisk（0x16f96d 字节）从 0x01080000 起的约 958 KiB。按 uImage 声明的 0x00108000 放就避开了；32 位 Arm zImage 位置无关，解压区与自身重叠时先自我搬移，放在这里同样能起，QEMU 已按同样的相对布局引导到用户态。
+	 */
+	if (!info->legacy) {
+		info->load = android_image_get_kernel_addr(&img_data, info->comp);
+		info->ep = info->load;
+	}
+
+	return 0;
+}
+
 /**
  * android_image_get_kernel() - processes kernel part of Android boot images
  * @hdr:	Pointer to boot image header, which is at the start
  *			of the image.
  * @vendor_boot_img:	Pointer to vendor boot image header, which is at the
  *				start of the image.
- * @verify:	Checksum verification flag. Currently unimplemented.
+ * @verify:	为非 0 时校验内核外套的 uImage 的数据 CRC
  * @os_data:	Pointer to a ulong variable, will hold os data start
  *			address.
  * @os_len:	Pointer to a ulong variable, will hold os data length.
@@ -379,17 +410,16 @@ int android_image_get_kernel(const void *hdr,
 			     ulong *os_data, ulong *os_len)
 {
 	struct andr_image_data img_data = {0};
-	ulong kernel_addr;
-	const struct legacy_img_hdr *ihdr;
-	ulong comp;
+	struct image_kernel_info info;
+	const char *arch;
+	int ret;
 
 	if (!android_image_get_data(hdr, vendor_boot_img, &img_data))
 		return -EINVAL;
 
-	comp = android_image_get_kcomp(hdr, vendor_boot_img);
-
-	kernel_addr = android_image_get_kernel_addr(&img_data, comp);
-	ihdr = (const struct legacy_img_hdr *)img_data.kernel_ptr;
+	ret = android_image_get_kernel_info(hdr, vendor_boot_img, verify, &info);
+	if (ret)
+		return ret;
 
 	/*
 	 * Not all Android tools use the id field for signing the image with
@@ -401,8 +431,16 @@ int android_image_get_kernel(const void *hdr,
 	if (strlen(andr_tmp_str))
 		printf("Android's image name: %s\n", andr_tmp_str);
 
-	printf("Kernel load addr 0x%08lx size %u KiB\n",
-	       kernel_addr, DIV_ROUND_UP(img_data.kernel_size, 1024));
+	if (info.arch != IH_ARCH_INVALID)
+		arch = genimg_get_arch_name(info.arch);
+	else if (info.comp != IH_COMP_NONE)
+		arch = "probed after decompression";
+	else
+		arch = "unrecognised";
+	printf("Kernel %s: %s, arch %s\n", info.legacy ? "uImage" : "data",
+	       genimg_get_comp_name(info.comp), arch);
+	printf("Kernel load addr 0x%08lx size %lu KiB\n",
+	       info.load, DIV_ROUND_UP(info.len, 1024));
 
 	int len = 0;
 	char *bootargs = env_get("bootargs");
@@ -445,19 +483,10 @@ int android_image_get_kernel(const void *hdr,
 	env_set("bootargs", newbootargs);
 	free(newbootargs);
 
-	if (os_data) {
-		if (image_get_magic(ihdr) == IH_MAGIC) {
-			*os_data = image_get_data(ihdr);
-		} else {
-			*os_data = img_data.kernel_ptr;
-		}
-	}
-	if (os_len) {
-		if (image_get_magic(ihdr) == IH_MAGIC)
-			*os_len = image_get_data_size(ihdr);
-		else
-			*os_len = img_data.kernel_size;
-	}
+	if (os_data)
+		*os_data = info.data;
+	if (os_len)
+		*os_len = info.len;
 	return 0;
 }
 
@@ -477,44 +506,9 @@ ulong android_image_get_end(const struct andr_boot_img_hdr_v0 *hdr,
 	struct andr_image_data img_data;
 
 	if (!android_image_get_data(hdr, vendor_boot_img, &img_data))
-		return -EINVAL;
-
-	if (img_data.header_version > 2)
 		return 0;
 
-	return img_data.boot_img_total_size;
-}
-
-ulong android_image_get_kload(const void *hdr,
-			      const void *vendor_boot_img)
-{
-	struct andr_image_data img_data;
-	ulong comp;
-
-	if (!android_image_get_data(hdr, vendor_boot_img, &img_data))
-		return -EINVAL;
-
-	comp = android_image_get_kcomp(hdr, vendor_boot_img);
-
-	return android_image_get_kernel_addr(&img_data, comp);
-}
-
-ulong android_image_get_kcomp(const void *hdr,
-			      const void *vendor_boot_img)
-{
-	struct andr_image_data img_data;
-	const void *p;
-
-	if (!android_image_get_data(hdr, vendor_boot_img, &img_data))
-		return -EINVAL;
-
-	p = (const void *)img_data.kernel_ptr;
-	if (image_get_magic((struct legacy_img_hdr *)p) == IH_MAGIC)
-		return image_get_comp((struct legacy_img_hdr *)p);
-	else if (get_unaligned_le32(p) == LZ4F_MAGIC)
-		return IH_COMP_LZ4;
-	else
-		return image_decomp_type(p, sizeof(u32));
+	return (ulong)hdr + img_data.boot_img_total_size;
 }
 
 /**
@@ -719,9 +713,23 @@ int android_image_get_ramdisk(const void *hdr, const void *vendor_boot_img,
 		    IS_ENABLED(CONFIG_ANDROID_BOOT_IMAGE_IGNORE_BLOB_ADDR)) {
 			*rd_data = img_data.ramdisk_ptr;
 		} else {
+			ulong img_start = (ulong)hdr;
+			ulong img_end = img_start + img_data.boot_img_total_size;
+
 			ramdisk_ptr = img_data.ramdisk_addr;
+			/*
+			 * 这一步早于加载内核：目的区压在启动映像自身上（例如映像放在 loadaddr，而 loadaddr 等于 ramdisk_addr）会先毁掉内核与 ramdisk 的原段，拒绝
+			 */
+			if (ramdisk_ptr < img_end &&
+			    ramdisk_ptr + img_data.ramdisk_size > img_start) {
+				printf("ERROR: ramdisk_addr %#lx..%#lx overlaps the boot image at %#lx..%#lx\n",
+				       ramdisk_ptr, ramdisk_ptr + img_data.ramdisk_size,
+				       img_start, img_end);
+				return -EXDEV;
+			}
 			*rd_data = ramdisk_ptr;
-			memcpy((void *)(ramdisk_ptr), (void *)img_data.ramdisk_ptr,
+			memcpy(map_sysmem(ramdisk_ptr, img_data.ramdisk_size),
+			       map_sysmem(img_data.ramdisk_ptr, img_data.ramdisk_size),
 			       img_data.ramdisk_size);
 		}
 	}

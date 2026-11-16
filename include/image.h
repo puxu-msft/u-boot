@@ -2108,7 +2108,7 @@ struct andr_boot_img_hdr_v0;
  * @hdr:	Pointer to image header, which is at the start
  *			of the image.
  * @vendor_boot_img : Pointer to vendor boot image header
- * @verify:	Checksum verification flag. Currently unimplemented.
+ * @verify:	为非 0 时校验内核外套的 uImage 的数据 CRC
  * @os_data:	Pointer to a ulong variable, will hold os data start
  *			address.
  * @os_len:	Pointer to a ulong variable, will hold os data length.
@@ -2118,6 +2118,20 @@ struct andr_boot_img_hdr_v0;
 int android_image_get_kernel(const void *hdr,
 			     const void *vendor_boot_img, int verify,
 			     ulong *os_data, ulong *os_len);
+
+/**
+ * android_image_get_kernel_info() - 识别启动映像里的内核并定下加载地址与入口
+ *
+ * 内核数据经 image_probe_kernel() 识别。外套 uImage 时加载地址与入口取 uImage 头；否则取启动映像头的 kernel_addr（默认值或 0 时按 kernel_addr_r 或原地执行，见 ANDROID_BOOT_IMAGE_IGNORE_BLOB_ADDR），入口同加载地址。
+ *
+ * @hdr:	启动映像头
+ * @vendor_boot_img: vendor_boot 映像头（头版本 3 起需要）
+ * @verify:	为 true 时校验 uImage 的数据 CRC
+ * @info:	返回识别结果；认不出格式时 @info->arch 为 IH_ARCH_INVALID 且不算错误
+ * Return: 0 成功，-EINVAL 启动映像无效，-EPROTONOSUPPORT 本机引导不了识别出的架构，其余负值同 image_probe_kernel()
+ */
+int android_image_get_kernel_info(const void *hdr, const void *vendor_boot_img,
+				  bool verify, struct image_kernel_info *info);
 
 /**
  * android_image_get_ramdisk() - Extracts the ramdisk load address and its size
@@ -2170,35 +2184,10 @@ bool android_image_get_dtb_by_index(ulong hdr_addr, ulong vendor_boot_img,
  *
  * @hdr: Pointer to image header
  * @vendor_boot_img : Pointer to vendor boot image header
- * Return: The end address of Android boot image
+ * Return: 启动映像的终点地址（头地址加各段按页对齐后的总长，头版本 0–4 一样；头版本 3 起内核与 ramdisk 同样在启动映像里），头解析失败时为 0
  */
 ulong android_image_get_end(const struct andr_boot_img_hdr_v0 *hdr,
 			    const void *vendor_boot_img);
-
-/**
- * android_image_get_kload() - Get the kernel load address
- *
- * This returns the kernel load address. The load address is extracted
- * from the boot image header or the "kernel_addr_r" environment variable
- *
- * @hdr: Pointer to image header
- * @vendor_boot_img : Pointer to vendor boot image header
- * Return: The kernel load address
- */
-ulong android_image_get_kload(const void *hdr,
-			      const void *vendor_boot_img);
-
-/**
- * android_image_get_kcomp() - Get kernel compression type
- *
- * This gets the kernel compression type from the boot image header
- *
- * @hdr: Pointer to image header
- * @vendor_boot_img : Pointer to vendor boot image header
- * Return: Kernel compression type
- */
-ulong android_image_get_kcomp(const void *hdr,
-			      const void *vendor_boot_img);
 
 /**
  * android_print_contents() - Prints out the contents of the Android format image

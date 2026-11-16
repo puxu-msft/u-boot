@@ -559,16 +559,17 @@ int boot_get_fdt(void *buf, const char *select, uint arch,
 		 * Firstly check if this android boot image has dtb field.
 		 */
 		dtb_idx = (u32)env_get_ulong("adtb_idx", 10, 0);
-		if (android_image_get_dtb_by_index((ulong)hdr, get_avendor_bootimg_addr(),
+		if (android_image_get_dtb_by_index(map_to_sysmem(hdr), get_avendor_bootimg_addr(),
 						   dtb_idx, &fdt_addr, &fdt_size)) {
 			fdt_blob = (char *)map_sysmem(fdt_addr, 0);
 			if (fdt_check_header(fdt_blob))
 				goto no_fdt;
 
 			debug("## Using FDT in Android image dtb area with idx %u\n", dtb_idx);
-		} else if (!android_image_get_second(hdr, &fdt_data, &fdt_len) &&
-			!fdt_check_header((char *)fdt_data)) {
-			fdt_blob = (char *)fdt_data;
+		} else if (!android_image_get_second((void *)(ulong)map_to_sysmem(hdr),
+						     &fdt_data, &fdt_len) &&
+			!fdt_check_header(map_sysmem(fdt_data, 0))) {
+			fdt_blob = map_sysmem(fdt_data, 0);
 			if (fdt_totalsize(fdt_blob) != fdt_len)
 				goto error;
 

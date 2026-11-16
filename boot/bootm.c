@@ -104,6 +104,18 @@ static struct legacy_img_hdr *image_get_kernel(ulong img_addr, int verify)
 }
 #endif
 
+#ifdef CONFIG_ANDROID_BOOT_IMAGE
+/*
+ * Android 映像函数（android_image_get_data() 等）收的是强转成指针的地址，内部自己 map_sysmem()；abootimg 没设 vendor_boot 时为 NULL
+ */
+static const void *bootm_android_vendor_boot(void)
+{
+	ulong addr = get_avendor_bootimg_addr();
+
+	return addr == -1UL ? NULL : (const void *)addr;
+}
+#endif
+
 /**
  * boot_get_kernel() - find kernel image
  *
@@ -214,15 +226,11 @@ static int boot_get_kernel(const char *addr_fit, struct bootm_headers *images,
 		/*
 		 * 启动映像就是 bootm 参数所指、刚认出 Android 格式的这份；abootimg 只补充参数给不出的 vendor_boot（头版本 3 起）
 		 */
-		boot_img = buf;
-		vendor_boot_img = NULL;
-		if (IS_ENABLED(CONFIG_CMD_ABOOTIMG))
-			vendor_boot_img = map_sysmem(get_avendor_bootimg_addr(), 0);
+		boot_img = (const void *)img_addr;
+		vendor_boot_img = bootm_android_vendor_boot();
 		printf("## Booting Android Image at 0x%08lx ...\n", img_addr);
 		ret = android_image_get_kernel(boot_img, vendor_boot_img,
 					       images->verify, os_data, os_len);
-		if (IS_ENABLED(CONFIG_CMD_ABOOTIMG))
-			unmap_sysmem(vendor_boot_img);
 		if (ret)
 			return ret;
 		break;
@@ -388,21 +396,29 @@ static int bootm_find_os(const char *cmd_name, const char *addr_fit)
 		break;
 #endif
 #ifdef CONFIG_ANDROID_BOOT_IMAGE
-	case IMAGE_FORMAT_ANDROID:
-		boot_img = os_hdr;
-		vendor_boot_img = NULL;
-		if (IS_ENABLED(CONFIG_CMD_ABOOTIMG))
-			vendor_boot_img = map_sysmem(get_avendor_bootimg_addr(), 0);
-		images.os.type = IH_TYPE_KERNEL;
-		images.os.comp = android_image_get_kcomp(boot_img, vendor_boot_img);
-		images.os.os = IH_OS_LINUX;
+	case IMAGE_FORMAT_ANDROID: {
+		struct image_kernel_info info;
+
+		boot_img = (const void *)(ulong)map_to_sysmem(os_hdr);
+		vendor_boot_img = bootm_android_vendor_boot();
+		/* boot_get_kernel() 已按 images.verify 校验过，这里只取参数 */
+		ret = android_image_get_kernel_info(boot_img, vendor_boot_img,
+						    false, &info);
+		if (ret) {
+			printf("Can't get kernel parameters (err=%d)\n", ret);
+			return 1;
+		}
 		images.os.end = android_image_get_end(boot_img, vendor_boot_img);
-		images.os.load = android_image_get_kload(boot_img, vendor_boot_img);
-		images.ep = images.os.load;
+		images.os.type = info.type;
+		images.os.comp = info.comp;
+		/* 压缩或认不出时为 IH_ARCH_INVALID，加载后由 bootm_resolve_os_arch() 判定 */
+		images.os.arch = info.arch;
+		images.os.os = IH_OS_LINUX;
+		images.os.load = info.load;
+		images.ep = info.ep;
 		ep_found = true;
-		if (IS_ENABLED(CONFIG_CMD_ABOOTIMG))
-			unmap_sysmem(vendor_boot_img);
 		break;
+	}
 #endif
 	default:
 		puts("ERROR: unknown image format type!\n");
@@ -524,7 +540,8 @@ int bootm_find_images(ulong img_addr, const char *conf_ramdisk,
 
 		/* check if FDT overlaps OS image */
 		if (check_overlap("FDT", map_to_sysmem(images.ft_addr),
-				  images.ft_len, start, size))
+				  map_to_sysmem(images.ft_addr) + images.ft_len,
+				  start, size))
 			return 1;
 
 		if (IS_ENABLED(CONFIG_CMD_FDT))
@@ -633,6 +650,73 @@ static int handle_decomp_error(int comp_type, size_t uncomp_size,
 #endif
 
 #ifndef USE_HOSTCC
+/**
+ * bootm_check_os_region() - 确认内核要占的区域不压在 ramdisk 与 FDT 上
+ *
+ * ramdisk 与 FDT 在 FINDOTHER 阶段已经定位（Android 启动映像的 ramdisk 还可能已拷到头里的 ramdisk_addr），要到加载内核之后才重定位；被内核或它的 BSS 压住就会被悄悄改坏。
+ *
+ * @images: 引导状态
+ * @start: 区域起点
+ * @end: 区域终点（不含）
+ * Return: 0 不重叠，-EXDEV 重叠（已打印）
+ */
+static int bootm_check_os_region(struct bootm_headers *images, ulong start,
+				 ulong end)
+{
+	ulong fdt;
+
+	if (check_overlap("RD", images->rd_start, images->rd_end, start,
+			  end - start))
+		return -EXDEV;
+	if (images->ft_addr && images->ft_len) {
+		fdt = map_to_sysmem(images->ft_addr);
+		if (check_overlap("FDT", fdt, fdt + images->ft_len, start,
+				  end - start))
+			return -EXDEV;
+	}
+
+	return 0;
+}
+
+/**
+ * bootm_resolve_os_arch() - 内核架构仍未知时按加载好的内容判定
+ *
+ * Android 启动映像不声明内核架构，FINDOS 按内容识别；压缩的内核要解压后在这里识别。认不出时按本机架构引导：这是上游一直以来的做法，arm64 Linux 内核都带 Image 头，32 位 Arm 的裸 Image 却没有魔数可认。ARM64_SUPPORT_AARCH32 下多打印一句，因为猜错会以错误的执行状态跳进内核。
+ *
+ * @images: 引导状态
+ * @load: 加载好的内核地址
+ * @len: 加载好的内核长度
+ * Return: 0 成功，-EPROTONOSUPPORT 本机引导不了这个架构，其余负值同 image_probe_kernel()（都已打印）
+ */
+static int bootm_resolve_os_arch(struct bootm_headers *images, ulong load,
+				 ulong len)
+{
+	struct image_kernel_info info;
+	int ret;
+
+	if (images->os.arch != IH_ARCH_INVALID)
+		return 0;
+
+	ret = image_probe_kernel(load, len, false, &info);
+	if (ret && ret != -ENOEXEC)
+		return ret;	/* 认出了格式但头部声明值不对，已打印 */
+	if (info.arch != IH_ARCH_INVALID) {
+		images->os.arch = info.arch;
+	} else {
+		images->os.arch = IH_ARCH_DEFAULT;
+		if (IS_ENABLED(CONFIG_ARM64_SUPPORT_AARCH32))
+			printf("WARNING: kernel format not recognised, booting it as %s\n",
+			       genimg_get_arch_name(IH_ARCH_DEFAULT));
+	}
+	if (!IS_ENABLED(CONFIG_SANDBOX) &&
+	    !image_arch_compatible(IH_ARCH_DEFAULT, images->os.arch)) {
+		printf("Unsupported Architecture 0x%x\n", images->os.arch);
+		return -EPROTONOSUPPORT;
+	}
+
+	return 0;
+}
+
 static int bootm_load_os(struct bootm_headers *images, int boot_progress)
 {
 	const struct image_info os = images->os;
@@ -673,6 +757,25 @@ static int bootm_load_os(struct bootm_headers *images, int boot_progress)
 		      decomp_len, load, image_len);
 	}
 
+	/*
+	 * 写之前能查的先查：不解压的拷贝事先知道终点；解压的终点要解压后才知道（下面再查），这里只看起点。内核压住它所在的映像时与解压后那处检查同一规则：传统 uImage 返回 BOOTM_ERR_OVERLAP 放行，其余格式（FIT、Android 启动映像）是错误
+	 */
+	no_overlap = (os.comp == IH_COMP_NONE && load == image_start);
+	if (!no_overlap) {
+		ulong known_end = os.comp == IH_COMP_NONE ? load + image_len :
+							    load + 1;
+
+		if (!images->legacy_hdr_valid && load < blob_end &&
+		    known_end > blob_start) {
+			printf("ERROR: kernel at 0x%lx would overwrite the image at 0x%lx..0x%lx\n",
+			       load, blob_start, blob_end);
+			return 1;
+		}
+		if (os.comp == IH_COMP_NONE &&
+		    bootm_check_os_region(images, load, known_end))
+			return 1;
+	}
+
 	load_buf = map_sysmem(load, 0);
 	image_buf = map_sysmem(os.image_start, image_len);
 	err = image_decomp(os.comp, load, os.image_start, os.type,
@@ -693,8 +796,6 @@ static int bootm_load_os(struct bootm_headers *images, int boot_progress)
 	debug("   kernel loaded at 0x%08lx, end = 0x%08lx\n", load, load_end);
 	bootstage_mark(BOOTSTAGE_ID_KERNEL_LOADED);
 
-	no_overlap = (os.comp == IH_COMP_NONE && load == image_start);
-
 	if (!no_overlap && load < blob_end && load_end > blob_start) {
 		debug("images.os.start = 0x%lX, images.os.end = 0x%lx\n",
 		      blob_start, blob_end);
@@ -714,6 +815,15 @@ static int bootm_load_os(struct bootm_headers *images, int boot_progress)
 		}
 	}
 
+	if (os.comp != IH_COMP_NONE &&
+	    bootm_check_os_region(images, load, load_end)) {
+		puts("ERROR: decompressed kernel overwrote them, reload the images\n");
+		return 1;
+	}
+
+	if (bootm_resolve_os_arch(images, load, load_end - load))
+		return 1;
+
 	if (IS_ENABLED(CONFIG_CMD_BOOTI) && images->os.arch == IH_ARCH_ARM64 &&
 	    images->os.os == IH_OS_LINUX) {
 		ulong relocated_addr;
@@ -728,6 +838,10 @@ static int bootm_load_os(struct bootm_headers *images, int boot_progress)
 
 		/* Handle BOOTM_STATE_LOADOS */
 		if (relocated_addr != load) {
+			/* 下面的 memmove 写满 image_size（含 BSS） */
+			if (bootm_check_os_region(images, relocated_addr,
+						  relocated_addr + image_size))
+				return 1;
 			printf("Moving Image from 0x%lx to 0x%lx, end=0x%lx\n",
 			       load, relocated_addr,
 			       relocated_addr + image_size);
@@ -737,17 +851,19 @@ static int bootm_load_os(struct bootm_headers *images, int boot_progress)
 		images->ep = relocated_addr;
 		images->os.start = relocated_addr;
 		images->os.end = relocated_addr + image_size;
+		/* 按内核最终占的区域登记 lmb，FDT 与 initrd 才不会被分配进去 */
+		load = relocated_addr;
+		load_end = relocated_addr + image_size;
 	}
 
 	if (CONFIG_IS_ENABLED(LMB)) {
-		phys_addr_t load;
+		phys_addr_t addr = (phys_addr_t)load;
 
-		load = (phys_addr_t)images->os.load;
-		err = lmb_alloc_mem(LMB_MEM_ALLOC_ADDR, 0, &load,
-				    (load_end - images->os.load), LMB_NONE);
+		err = lmb_alloc_mem(LMB_MEM_ALLOC_ADDR, 0, &addr,
+				    load_end - load, LMB_NONE);
 		if (err) {
 			log_err("Unable to allocate memory %#lx for loading OS\n",
-				images->os.load);
+				load);
 			return 1;
 		}
 	}

@@ -414,26 +414,24 @@ static int select_ramdisk(struct bootm_headers *images, const char *select, u8 a
 	case IMAGE_FORMAT_ANDROID:
 		if (IS_ENABLED(CONFIG_ANDROID_BOOT_IMAGE)) {
 			int ret;
+			/* Android 映像函数收强转成指针的地址，见 android_image_get_data() */
 			if (IS_ENABLED(CONFIG_CMD_ABOOTIMG)) {
-				ulong boot_img = rd_addr;
 				ulong init_boot_img = get_ainit_bootimg_addr();
-				void *vendor_boot_img = map_sysmem(get_avendor_bootimg_addr(), 0);
-				void *ramdisk_img;
+				ulong vendor_boot_img = get_avendor_bootimg_addr();
+				ulong ramdisk_img;
 
 				if (init_boot_img == -1)
-					ramdisk_img = map_sysmem(boot_img, 0);
+					ramdisk_img = rd_addr;
 				else
-					ramdisk_img = map_sysmem(init_boot_img, 0);
+					ramdisk_img = init_boot_img;
 
-				ret = android_image_get_ramdisk(ramdisk_img, vendor_boot_img,
+				ret = android_image_get_ramdisk((void *)ramdisk_img,
+								vendor_boot_img == -1 ? NULL :
+								(void *)vendor_boot_img,
 								rd_datap, rd_lenp);
-				unmap_sysmem(vendor_boot_img);
-				unmap_sysmem(ramdisk_img);
 			} else {
-				void *ptr = map_sysmem(images->os.start, 0);
-
-				ret = android_image_get_ramdisk(ptr, NULL, rd_datap, rd_lenp);
-				unmap_sysmem(ptr);
+				ret = android_image_get_ramdisk((void *)rd_addr, NULL,
+								rd_datap, rd_lenp);
 			}
 
 			if (ret == -ENOENT)
