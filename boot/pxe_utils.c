@@ -555,6 +555,8 @@ static int label_boot(struct pxe_context *ctx, struct pxe_label *label)
 	int zboot_argc = 3;
 	int len = 0;
 	ulong kernel_addr_r;
+	ulong kernel_size = 0;
+	struct image_kernel_info kinfo;
 	void *buf;
 
 	label_print(label);
@@ -574,8 +576,8 @@ static int label_boot(struct pxe_context *ctx, struct pxe_label *label)
 	}
 
 	if (get_relfile_envaddr(ctx, label->kernel, "kernel_addr_r",
-				(enum bootflow_img_t)IH_TYPE_KERNEL, NULL)
-				< 0) {
+				(enum bootflow_img_t)IH_TYPE_KERNEL,
+				&kernel_size) < 0) {
 		printf("Skipping %s for failure retrieving kernel\n",
 		       label->name);
 		return 1;
@@ -824,6 +826,12 @@ static int label_boot(struct pxe_context *ctx, struct pxe_label *label)
 	    IS_ENABLED(CONFIG_CMD_BOOTM)) {
 		log_debug("using bootm\n");
 		do_bootm(ctx->cmdtp, 0, bootm_argc, bootm_argv);
+	/* 32 位 Arm zImage 用 bootz：ARM64 上 booti 也开着，按内容选，否则 zImage 会被当成 arm64 Image 拒掉 */
+	} else if (IS_ENABLED(CONFIG_CMD_BOOTZ) &&
+		   !image_probe_kernel(kernel_addr_r, kernel_size, false, &kinfo) &&
+		   kinfo.arch == IH_ARCH_ARM) {
+		log_debug("using bootz\n");
+		do_bootz(ctx->cmdtp, 0, bootm_argc, bootm_argv);
 	/* Try booting an AArch64 Linux kernel image */
 	} else if (IS_ENABLED(CONFIG_CMD_BOOTI)) {
 		log_debug("using booti\n");
