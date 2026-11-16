@@ -12,8 +12,6 @@
 
 DECLARE_GLOBAL_DATA_PTR;
 
-#define LINUX_ARM64_IMAGE_MAGIC 0x644d5241
-
 /* See Documentation/arm64/booting.txt in the Linux kernel */
 struct Image_header {
 	uint32_t	code0;		/* Executable code */

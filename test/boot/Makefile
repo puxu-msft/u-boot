@@ -13,7 +13,7 @@ endif
 endif
 
 ifdef CONFIG_SANDBOX
-obj-$(CONFIG_$(PHASE_)CMDLINE) += bootm.o
+obj-$(CONFIG_$(PHASE_)CMDLINE) += bootm.o kernel_probe.o
 ifdef CONFIG_UT_DM
 obj-$(CONFIG_$(PHASE_)OF_LIBFDT) += image_fdt.o
 endif

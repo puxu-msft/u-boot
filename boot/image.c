@@ -21,7 +21,9 @@
 #endif
 
 #include <linux/errno.h>
+#include <mapmem.h>
 #include <asm/io.h>
+#include <asm/unaligned.h>
 
 /* Set this if we have less than 4 MB of malloc() space */
 #if CONFIG_SYS_MALLOC_LEN < (4096 * 1024)
@@ -441,6 +443,90 @@ int image_decomp_type(const unsigned char *buf, ulong len)
 
 	return cmagic->comp_id;
 }
+
+#ifndef USE_HOSTCC
+static int image_probe_legacy_kernel(const struct legacy_img_hdr *hdr,
+				     ulong addr, ulong len, bool verify,
+				     struct image_kernel_info *info)
+{
+	ulong hsize = image_get_header_size();
+
+	if (!image_check_hcrc(hdr)) {
+		puts("Kernel uImage: bad header checksum\n");
+		return -EINVAL;
+	}
+	if (!image_check_type(hdr, IH_TYPE_KERNEL) &&
+	    !image_check_type(hdr, IH_TYPE_KERNEL_NOLOAD)) {
+		printf("Kernel uImage: type '%s' is not a kernel\n",
+		       genimg_get_type_name(image_get_type(hdr)));
+		return -EINVAL;
+	}
+	if (image_get_data_size(hdr) > len - hsize) {
+		printf("Kernel uImage: data size %#x exceeds the %#lx bytes present\n",
+		       image_get_data_size(hdr), len - hsize);
+		return -E2BIG;
+	}
+	if (verify && !image_check_dcrc(hdr)) {
+		puts("Kernel uImage: bad data CRC\n");
+		return -EBADMSG;
+	}
+
+	info->data = addr + hsize;
+	info->len = image_get_data_size(hdr);
+	info->load = image_get_load(hdr);
+	info->ep = image_get_ep(hdr);
+	info->arch = image_get_arch(hdr);
+	info->comp = image_get_comp(hdr);
+	info->type = image_get_type(hdr);
+	info->legacy = true;
+
+	return 0;
+}
+
+int image_probe_kernel(ulong addr, ulong len, bool verify,
+		       struct image_kernel_info *info)
+{
+	const u8 *buf;
+	ulong zi_start, zi_end;
+	int comp, ret = 0;
+
+	memset(info, '\0', sizeof(*info));
+	info->data = addr;
+	info->len = len;
+	info->type = IH_TYPE_KERNEL;
+
+	buf = map_sysmem(addr, len);
+	if (len >= image_get_header_size() &&
+	    image_check_magic((const struct legacy_img_hdr *)buf)) {
+		ret = image_probe_legacy_kernel((const void *)buf, addr, len,
+						verify, info);
+	} else if (len >= 0x30 &&
+		   get_unaligned_le32(buf + 0x24) == LINUX_ARM_ZIMAGE_MAGIC) {
+		/* 0x28/0x2c 是 zImage 的链接起止地址，差即 zImage 本体长度（不含附加的 DTB） */
+		zi_start = get_unaligned_le32(buf + 0x28);
+		zi_end = get_unaligned_le32(buf + 0x2c);
+		if (zi_end <= zi_start || zi_end - zi_start > len) {
+			printf("Kernel zImage: size %#lx exceeds the %#lx bytes present\n",
+			       zi_end - zi_start, len);
+			ret = -E2BIG;
+		} else {
+			info->arch = IH_ARCH_ARM;
+		}
+	} else if (len >= 0x40 &&
+		   get_unaligned_le32(buf + 0x38) == LINUX_ARM64_IMAGE_MAGIC) {
+		info->arch = IH_ARCH_ARM64;
+	} else {
+		comp = image_decomp_type(buf, len);
+		if (comp > 0)
+			info->comp = comp;
+		else
+			ret = -ENOEXEC;
+	}
+	unmap_sysmem(buf);
+
+	return ret;
+}
+#endif /* !USE_HOSTCC */
 
 int image_decomp(int comp, ulong load, ulong image_start, int type,
 		 void *load_buf, void *image_buf, ulong image_len,

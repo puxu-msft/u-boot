@@ -9,8 +9,6 @@
 #include <image.h>
 #include <asm/io.h>
 
-#define	LINUX_ARM_ZIMAGE_MAGIC	0x016f2818
-
 struct arm_z_header {
 	uint32_t	code[9];
 	uint32_t	zi_magic;

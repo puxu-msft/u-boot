@@ -313,6 +313,9 @@ static inline int image_ph_type(int image_ph_type)
 
 #define LZ4F_MAGIC	0x184D2204	/* LZ4 Magic Number		*/
 #define IH_MAGIC	0x27051956	/* Image Magic Number		*/
+/* Linux 内核映像头的魔数，小端：Documentation/arch/arm/booting.rst 与 Documentation/arch/arm64/booting.rst */
+#define LINUX_ARM_ZIMAGE_MAGIC	0x016f2818	/* 32 位 Arm zImage，偏移 0x24 */
+#define LINUX_ARM64_IMAGE_MAGIC	0x644d5241	/* arm64 Image "ARM\x64"，偏移 0x38 */
 #define IH_NMLEN		32	/* Image Name Length		*/
 
 /* Reused from common.h */
@@ -1090,6 +1093,43 @@ static inline int image_check_target_arch(const struct legacy_img_hdr *hdr)
  * lzo, lzma, gzip, bzip2
  */
 int image_decomp_type(const unsigned char *buf, ulong len);
+
+/**
+ * struct image_kernel_info - image_probe_kernel() 的结果
+ *
+ * @data:	内核数据的地址（有 uImage 头时为头之后）
+ * @len:	内核数据的长度
+ * @load:	uImage 头声明的加载地址（仅 @legacy）
+ * @ep:		uImage 头声明的入口（仅 @legacy）
+ * @arch:	内核架构 IH_ARCH_ARM 或 IH_ARCH_ARM64；uImage 取头里声明的值；压缩数据或认不出时为 IH_ARCH_INVALID
+ * @comp:	内核数据的压缩方式 IH_COMP_*
+ * @type:	IH_TYPE_KERNEL；uImage 取头里的 IH_TYPE_KERNEL 或 IH_TYPE_KERNEL_NOLOAD
+ * @legacy:	内核数据外套着传统 uImage 头
+ */
+struct image_kernel_info {
+	ulong data;
+	ulong len;
+	ulong load;
+	ulong ep;
+	uint8_t arch;
+	uint8_t comp;
+	uint8_t type;
+	bool legacy;
+};
+
+/**
+ * image_probe_kernel() - 按内容识别内核映像
+ *
+ * 依次认：传统 uImage（头 CRC 正确、类型是内核、声明的数据长度不超出 @len）；32 位 Arm zImage（0x24 处 LINUX_ARM_ZIMAGE_MAGIC，0x28/0x2c 声明的长度不超出 @len）；arm64 Image（0x38 处 LINUX_ARM64_IMAGE_MAGIC）；image_decomp_type() 认得的压缩数据（架构要解压后再认）。各入口共用这一处判断。
+ *
+ * @addr:	映像地址
+ * @len:	映像长度
+ * @verify:	为 true 时还校验 uImage 的数据 CRC
+ * @info:	返回识别结果；失败时也填好原样数据的描述
+ * Return: 0 认出（压缩数据的 @info->arch 为 IH_ARCH_INVALID），-ENOEXEC 认不出，-EINVAL uImage 头 CRC 错或不是内核，-E2BIG 头里声明的长度超出 @len，-EBADMSG uImage 数据 CRC 错
+ */
+int image_probe_kernel(ulong addr, ulong len, bool verify,
+		       struct image_kernel_info *info);
 
 /**
  * image_decomp() - decompress an image
