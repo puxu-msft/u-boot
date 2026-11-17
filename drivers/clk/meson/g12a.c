@@ -168,6 +168,16 @@ static int meson_set_gate_by_id(struct clk *clk, unsigned long id, bool on)
 	if (gate->reg == 0)
 		return 0;
 
+	/*
+	 * fclk_div2、fclk_div3 被常驻固件使用（Linux 的 g12a 时钟驱动标为
+	 * CLK_IS_CRITICAL），又是 eMMC/SD 控制器 clkin1、以太网 clkin0 等多个
+	 * 外设共用的时钟源；本驱动的门没有引用计数，任一用户的 clk_disable
+	 * （如以太网找不到 PHY 时 designware 的 clk_release_all）都会把其它
+	 * 外设的时钟源一起关掉，所以这两个门只开不关。
+	 */
+	if (!on && (id == CLKID_FCLK_DIV2 || id == CLKID_FCLK_DIV3))
+		return 0;
+
 	debug("%s: really %sabling %ld\n", __func__, on ? "en" : "dis", id);
 
 	regmap_update_bits(priv->map, gate->reg,
