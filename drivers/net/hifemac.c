@@ -231,15 +231,24 @@ static void hisi_femac_port_init(struct hisi_femac_priv *priv)
 	writel(val, priv->port_base + QLEN_SET);
 }
 
+/*
+ * 把一个接收缓冲交给硬件。网络栈会就地改写收到的帧（arp_receive() 与 ping_receive() 把应答先写在接收缓冲里再拷走），这些写入以脏行留在 D-cache 里；不先作废就交出去，脏行之后被写回（逐出，或 recv 里的 invalidate：Cortex-A53 的 DC IVAC 遇到脏行先 clean 再作废）会盖掉 DMA 刚写进的下一帧的开头。
+ * 作废整块缓冲：net_rx_packets[] 按 PKTALIGN 对齐、间隔 PKTSIZE_ALIGN，范围首尾都在 cache 行边界上，不波及相邻缓冲。
+ */
+static void hisi_femac_rx_give(struct hisi_femac_priv *priv, uchar *buf)
+{
+	ulong addr = (ulong)buf;
+
+	invalidate_dcache_range(addr, addr + PKTSIZE_ALIGN);
+	writel(addr, priv->port_base + IQ_ADDR);
+}
+
 static void hisi_femac_rx_refill(struct hisi_femac_priv *priv)
 {
 	int i;
-	ulong addr;
 
-	for (i = 0; i < HW_RX_FIFO_DEPTH; i++) {
-		addr = (ulong)net_rx_packets[i];
-		writel(addr, priv->port_base + IQ_ADDR);
-	}
+	for (i = 0; i < HW_RX_FIFO_DEPTH; i++)
+		hisi_femac_rx_give(priv, net_rx_packets[i]);
 }
 
 static void hisi_femac_adjust_link(struct udevice *dev)
@@ -382,10 +391,8 @@ static int hisi_femac_recv(struct udevice *dev, int flags, uchar **packetp)
 static int hisi_femac_free_pkt(struct udevice *dev, uchar *packet, int length)
 {
 	struct hisi_femac_priv *priv = dev_get_priv(dev);
-	ulong addr = (ulong)packet;
 
-	// Tell hardware the packet can be reused
-	writel(addr, priv->port_base + IQ_ADDR);
+	hisi_femac_rx_give(priv, packet);
 
 	return 0;
 }
