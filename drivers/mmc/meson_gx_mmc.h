@@ -35,6 +35,12 @@ enum meson_gx_mmc_compatible {
 #define   CLK_TX_PHASE_270		(3 << 10)
 #define   CLK_ALWAYS_ON			BIT(24)
 
+/* 重采样调整寄存器：GX（v2）在 0x08，AXG 起（v3，含 G12A/SM1）在 0x0c（v3 的 0x08 是 DELAY2） */
+#define MESON_SD_EMMC_ADJUST		0x08
+#define MESON_SD_EMMC_V3_ADJUST		0x0c
+#define   ADJUST_ADJ_EN			BIT(13)
+#define   ADJUST_ADJ_DELAY_MASK		GENMASK(21, 16)
+
 #define MESON_SD_EMMC_CFG		0x44
 #define   CFG_BUS_WIDTH_MASK		GENMASK(1, 0)
 #define   CFG_BUS_WIDTH_1		0

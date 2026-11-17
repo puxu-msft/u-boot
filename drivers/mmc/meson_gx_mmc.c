@@ -340,6 +340,7 @@ static int meson_mmc_probe(struct udevice *dev)
 	struct mmc_config *cfg = &pdata->cfg;
 	struct clk_bulk clocks;
 	uint32_t val;
+	uint adjust;
 	int ret;
 
 	/* Enable the clocks feeding the MMC controller */
@@ -395,6 +396,18 @@ static int meson_mmc_probe(struct udevice *dev)
 	val &= ~CFG_SDCLK_ALWAYS_ON;
 	val |= CFG_AUTO_CLK;
 	meson_write(mmc, val, MESON_SD_EMMC_CFG);
+
+	/*
+	 * 前一级（如厂商 u-boot 的 HS200 调优）可能留下重采样（ADJ_EN 与延迟）。本驱动不做调优，
+	 * 只用 legacy/HS/HS52/DDR52 时序，Linux 在这些时序下关重采样（meson-gx-mmc.c 的
+	 * meson_mmc_check_resampling）；留着它，宽总线的读回校验会失败而退到窄总线。
+	 * 偏移按代区分：amlogic,meson-axg-mmc 在本驱动里也归为 MMC_COMPATIBLE_GX，所以按兼容串判断。
+	 */
+	adjust = device_is_compatible(dev, "amlogic,meson-gx-mmc") ?
+		 MESON_SD_EMMC_ADJUST : MESON_SD_EMMC_V3_ADJUST;
+	val = meson_read(mmc, adjust);
+	val &= ~(ADJUST_ADJ_EN | ADJUST_ADJ_DELAY_MASK);
+	meson_write(mmc, val, adjust);
 
 	return 0;
 }
