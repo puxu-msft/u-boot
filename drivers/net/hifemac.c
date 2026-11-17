@@ -31,7 +31,10 @@
 #define MAC_PORTSET_LINKED		BIT(1)
 #define MAC_PORTSET_SPEED_100M		BIT(2)
 #define MAC_SET				0x0210
-#define MAX_FRAME_SIZE			1600
+/*
+ * MAC 接收的最长帧。net_rx_packets[] 每块只有 PKTSIZE_ALIGN（1536）字节：取 PKTSIZE（1522，带 VLAN 标签与 FCS 的最长标准帧），这个字段不论是否计入 FCS，放行的帧都装得进一块缓冲。
+ */
+#define MAX_FRAME_SIZE			PKTSIZE
 #define MAX_FRAME_SIZE_MASK		GENMASK(10, 0)
 #define BIT_PAUSE_EN			BIT(18)
 #define RX_COALESCE_SET			0x0340
