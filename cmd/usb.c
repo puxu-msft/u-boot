@@ -24,6 +24,11 @@
 
 #ifdef CONFIG_USB_STORAGE
 static int usb_stor_curr_dev = -1; /* current device */
+
+int usb_stor_get_curr_dev(void)
+{
+	return usb_stor_curr_dev;
+}
 #endif
 
 /* some display routines (info command) */

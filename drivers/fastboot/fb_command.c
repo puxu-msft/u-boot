@@ -394,6 +394,8 @@ static void __maybe_unused run_ucmd(char *cmd_parameter, char *response)
 		return;
 	}
 
+	/* 每个请求是一次新输入：红线确认只接受在更早的请求里被拦的动作 */
+	redline_input_next();
 	if (run_command(cmd_parameter, 0))
 		fastboot_fail("", response);
 	else
@@ -404,6 +406,7 @@ static char g_a_cmd_buff[64];
 
 void fastboot_acmd_complete(void)
 {
+	redline_input_next();
 	run_command(g_a_cmd_buff, 0);
 }
 

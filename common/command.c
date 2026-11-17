@@ -636,6 +636,16 @@ enum command_ret_t cmd_process(int flag, int argc, char *const argv[],
 	if (!rc) {
 		int newrep;
 
+		/*
+		 * 交互输入、run、bootcmd 与 source 脚本、fastboot oem run 都经这里按名字执行命令，红线确认门放在这里才覆盖全部路径；
+		 * redline yes 带 CMD_FLAG_REDLINE_CONFIRMED 执行已确认的那一条，标志只在这一层生效，不传给命令本身
+		 */
+		if (!(flag & CMD_FLAG_REDLINE_CONFIRMED) &&
+		    redline_gate(cmdtp, argc, argv)) {
+			*repeatable = 0;
+			return CMD_RET_FAILURE;
+		}
+		flag &= ~CMD_FLAG_REDLINE_CONFIRMED;
 		if (ticks)
 			*ticks = get_timer(0);
 		rc = cmd_call(cmdtp, flag, argc, argv, &newrep);

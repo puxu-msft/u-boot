@@ -278,6 +278,46 @@ enum command_ret_t {
 enum command_ret_t cmd_process(int flag, int argc, char *const argv[],
 			       int *repeatable, unsigned long *ticks);
 
+#if IS_ENABLED(CONFIG_CMD_REDLINE)
+/**
+ * redline_gate() - 存储写入类命令的红线确认门（cmd/redline.c）
+ *
+ * cmd_process() 在执行命令前调用。命令落在红线规则表里时不执行：打印红线动作清单，记为唯一的待确认动作，由 redline yes 执行一次
+ *
+ * @cmdtp:	find_cmd() 找到的命令（按其规范名匹配规则，缩写与 .后缀同样命中）
+ * @argc:	参数个数
+ * @argv:	参数，argv[0] 是命令本身
+ * Return: 0 放行；CMD_RET_FAILURE 已拦下
+ */
+int redline_gate(struct cmd_tbl *cmdtp, int argc, char *const argv[]);
+
+/**
+ * redline_input_next() - 开始新的一次输入（cmd/redline.c）
+ *
+ * 交互解析器每读进一行命令、fastboot 每收到一个执行命令的请求时调用，输入代次加一。redline yes 只执行在更早的代次里被拦的动作：同一行、同一段脚本（run、bootcmd、source）或同一个 fastboot 请求里既被拦又确认的，清单还没有人看过
+ */
+void redline_input_next(void);
+
+/**
+ * redline_sm_input_buffer() - Amlogic 安全监控输入共享缓冲的地址（cmd/redline.c，弱函数）
+ *
+ * smc 0x82000031（eFuse 写）烧的是这块缓冲里的字节，红线清单逐字节列出它们。Amlogic 板上经 smc 0x82000020 向安全监控查询；其余平台为 0，测试可以覆盖它
+ *
+ * Return: 缓冲的物理地址，取不到时为 0
+ */
+ulong redline_sm_input_buffer(void);
+#else
+static inline int redline_gate(struct cmd_tbl *cmdtp, int argc,
+			       char *const argv[])
+{
+	return 0;
+}
+
+static inline void redline_input_next(void)
+{
+}
+#endif
+
 void fixup_cmdtable(struct cmd_tbl *cmdtp, int size);
 
 /**
@@ -348,6 +388,7 @@ int cmd_source_script(ulong addr, const char *fit_uname, const char *confname);
 #define CMD_FLAG_REPEAT		0x0001	/* repeat last command		*/
 #define CMD_FLAG_BOOTD		0x0002	/* command is from bootd	*/
 #define CMD_FLAG_ENV		0x0004	/* command is from the environment */
+#define CMD_FLAG_REDLINE_CONFIRMED 0x0008	/* redline yes 已确认，本次分发不再拦 */
 
 #ifdef CONFIG_AUTO_COMPLETE
 # define _CMD_COMPLETE(x) x,

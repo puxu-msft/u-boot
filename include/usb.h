@@ -232,6 +232,13 @@ int board_usb_cleanup(int index, enum usb_init_type init);
 int usb_stor_scan(int mode);
 int usb_stor_info(void);
 
+/**
+ * usb_stor_get_curr_dev() - usb read/write/erase 将作用的存储设备号（cmd/usb.c）
+ *
+ * Return: 设备号；还没扫描到存储设备时为 -1
+ */
+int usb_stor_get_curr_dev(void);
+
 #endif
 
 #ifdef CONFIG_USB_HOST_ETHER

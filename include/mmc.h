@@ -896,6 +896,15 @@ void print_mmc_devices(char separator);
  * Return: 0 if there is no MMC device, else the number of devices
  */
 int get_mmc_num(void);
+
+/**
+ * mmc_cmd_get_dev() - mmc 命令下一条子命令将作用的设备号（cmd/mmc.c）
+ *
+ * 与 do_mmcops() 相同：还没用 mmc dev 选过设备时取 0
+ *
+ * Return: 设备号；没有 MMC 设备时为 -1
+ */
+int mmc_cmd_get_dev(void);
 int mmc_switch_part(struct mmc *mmc, unsigned int part_num);
 int mmc_hwpart_config(struct mmc *mmc, const struct mmc_hwpart_conf *conf,
 		      enum mmc_hwpart_conf_mode mode);

@@ -21,6 +21,14 @@
 
 static int curr_device = -1;
 
+int mmc_cmd_get_dev(void)
+{
+	if (curr_device < 0)
+		return get_mmc_num() > 0 ? 0 : -1;
+
+	return curr_device;
+}
+
 static void print_mmcinfo(struct mmc *mmc)
 {
 	int i;

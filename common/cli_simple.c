@@ -281,6 +281,9 @@ void cli_simple_loop(void)
 			bootretry_reset_cmd_timeout();
 		}
 		len = cli_readline(CONFIG_SYS_PROMPT);
+		/* 读进了一行（空行即回车重复上一条，同样是一次新输入）：红线确认的输入代次加一 */
+		if (len >= 0)
+			redline_input_next();
 
 		flag = 0;	/* assume no special flags for now */
 		if (len > 0)

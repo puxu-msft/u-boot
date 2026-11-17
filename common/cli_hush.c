@@ -971,6 +971,7 @@ static int uboot_cli_readline(struct in_str *i)
 {
 	char *prompt;
 	char __maybe_unused *ps_prompt = NULL;
+	int n;
 
 	if (i->promptmode == 1)
 		prompt = CONFIG_SYS_PROMPT;
@@ -986,7 +987,12 @@ static int uboot_cli_readline(struct in_str *i)
 		prompt = ps_prompt;
 #endif
 
-	return cli_readline(prompt);
+	n = cli_readline(prompt);
+	/* 读进了一行交互输入（续行同样算）：红线确认的输入代次加一 */
+	if (n >= 0)
+		redline_input_next();
+
+	return n;
 }
 #endif
 
