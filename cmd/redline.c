@@ -761,7 +761,8 @@ struct rl_fid {
 
 /*
  * 放行：0x84000009 PSCI SYSTEM_RESET（Amlogic BL31 把 x1 当重启原因；m12.env 的 m12_boot_reset 与开发循环回线刷态用）、0x82000049 Amlogic 设重启原因（m12.env 的 m12_android_reason）；它们只改重启原因与复位，不碰存储。
- * 以及只返回信息的查询：PSCI_VERSION 与 PSCI_FEATURES（TF-A v1.3 psci_main.c 里分别返回常量与 psci_caps 位）、SMCCC_VERSION 与 SMCCC_ARCH_FEATURES（SMCCC 的发现调用，drivers/firmware/psci.c 探测时就这样用；没有该服务的固件返回 NOT_SUPPORTED）
+ * 以及只返回信息的查询：PSCI_VERSION 与 PSCI_FEATURES（TF-A v1.3 psci_main.c 里分别返回常量与 psci_caps 位）、SMCCC_VERSION 与 SMCCC_ARCH_FEATURES（SMCCC 的发现调用，drivers/firmware/psci.c 探测时就这样用；没有该服务的固件返回 NOT_SUPPORTED）。
+ * 以及 Amlogic 厂商 BL31 安全存储的只读调用，供手工做 RAM 级实验（在控制台上 mw 填输入共享缓冲、smc、md 看输出缓冲）：取四块共享缓冲的地址与块大小（返回常量或读全局）、QUERY/READ/TELL/VERIFY/STATUS/LIST（只读 key 表，只往输出共享缓冲写）、GET_ENCTYPE（经 SCP 邮箱读 eFuse，只读）、VERSION；依据 M12 厂商 BL31 v1.3:079690f10 的反汇编，它们没有计数、锁定等副作用。改存储与 BL31 运行态的 WRITE 0x82000062、REMOVE 0x82000068、NOTIFY 0x82000066、NOTIFY_EX 0x82000069、SET_ENCTYPE 0x8200006a、SET_STORAGE_INFO 0x82000028 不放行
  */
 static const struct rl_fid smc_allowed[] = {
 	{ 0x84000009, "PSCI SYSTEM_RESET" },
@@ -770,9 +771,22 @@ static const struct rl_fid smc_allowed[] = {
 	{ 0x8400000a, "PSCI_FEATURES" },
 	{ 0x80000000, "SMCCC_VERSION" },
 	{ 0x80000001, "SMCCC_ARCH_FEATURES" },
+	{ 0x82000023, "Amlogic secure storage: input buffer address" },
+	{ 0x82000024, "Amlogic secure storage: output buffer address" },
+	{ 0x82000025, "Amlogic secure storage: block buffer address" },
+	{ 0x82000026, "Amlogic secure storage: message area address" },
+	{ 0x82000027, "Amlogic secure storage: block size" },
+	{ 0x82000060, "Amlogic secure storage: query" },
+	{ 0x82000061, "Amlogic secure storage: read" },
+	{ 0x82000063, "Amlogic secure storage: tell (length)" },
+	{ 0x82000064, "Amlogic secure storage: verify (SHA-256)" },
+	{ 0x82000065, "Amlogic secure storage: status (attributes)" },
+	{ 0x82000067, "Amlogic secure storage: list" },
+	{ 0x8200006b, "Amlogic secure storage: get encryption type" },
+	{ 0x8200006c, "Amlogic secure storage: version" },
 };
 
-/* 拦下时能叫出名字的 fid：Amlogic SiP 调用取自 drivers/sm/meson-sm.c 的 meson_sm_gxbb_data，PSCI 取自 include/linux/psci.h */
+/* 拦下时能叫出名字的 fid：Amlogic SiP 调用取自 drivers/sm/meson-sm.c 的 meson_sm_gxbb_data 与 M12 厂商 BL31 的反汇编，PSCI 取自 include/linux/psci.h */
 static const struct rl_fid smc_known[] = {
 	{ 0x82000020, "Amlogic SiP: get the shared input buffer address" },
 	{ 0x82000021, "Amlogic SiP: get the shared output buffer address" },
@@ -780,6 +794,12 @@ static const struct rl_fid smc_known[] = {
 	{ 0x82000031, "Amlogic SiP: eFuse write from the shared input buffer" },
 	{ 0x82000044, "Amlogic SiP: get chip ID" },
 	{ 0x82000093, "Amlogic SiP: power domain set" },
+	{ 0x82000028, "Amlogic SiP: set storage info (AO register)" },
+	{ 0x82000062, "Amlogic secure storage: write (re-encrypts the block buffer)" },
+	{ 0x82000066, "Amlogic secure storage: notify (rebuilds the key table)" },
+	{ 0x82000068, "Amlogic secure storage: remove (re-encrypts the block buffer)" },
+	{ 0x82000069, "Amlogic secure storage: notify_ex (rebuilds the key table)" },
+	{ 0x8200006a, "Amlogic secure storage: set encryption type" },
 	{ 0x84000008, "PSCI SYSTEM_OFF" },
 	{ 0x84000012, "PSCI SYSTEM_RESET2" },
 	{ 0xc4000012, "PSCI SYSTEM_RESET2 (64-bit)" },
@@ -865,7 +885,7 @@ static bool rl_smc(struct rl_text *t, const char *name, int argc,
 		rl_printf(t, "  function: W0 0x%08x = %s\n", (u32)fid, what);
 	rl_printf(t, "  args    : x1 0x%lx, x2 0x%lx, x3 0x%lx, x4 0x%lx, x5 0x%lx, x6 0x%lx, w7 0x%lx\n",
 		  a[0], a[1], a[2], a[3], a[4], a[5], a[6]);
-	rl_puts(t, "  allowed : PSCI SYSTEM_RESET 0x84000009, Amlogic set reboot reason 0x82000049, PSCI_VERSION, PSCI_FEATURES, SMCCC_VERSION, SMCCC_ARCH_FEATURES\n");
+	rl_puts(t, "  allowed : PSCI SYSTEM_RESET 0x84000009, Amlogic set reboot reason 0x82000049, PSCI_VERSION, PSCI_FEATURES, SMCCC_VERSION, SMCCC_ARCH_FEATURES, Amlogic secure storage read-only calls 0x82000023-0x82000027, 0x82000060/61/63/64/65/67/6b/6c\n");
 	if ((u32)fid == RL_SMC_EFUSE_WRITE) {
 		rl_smc_efuse(t, a[0], a[1]);
 		rl_puts(t, "  IRREVERSIBLE: eFuse bits are one-time programmable\n");

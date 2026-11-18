@@ -871,7 +871,7 @@ static int cmd_test_redline_erase_group(struct unit_test_state *uts)
 }
 CMD_TEST(cmd_test_redline_erase_group, UTF_CONSOLE);
 
-#define SMC_ALLOWED	"  allowed : PSCI SYSTEM_RESET 0x84000009, Amlogic set reboot reason 0x82000049, PSCI_VERSION, PSCI_FEATURES, SMCCC_VERSION, SMCCC_ARCH_FEATURES"
+#define SMC_ALLOWED	"  allowed : PSCI SYSTEM_RESET 0x84000009, Amlogic set reboot reason 0x82000049, PSCI_VERSION, PSCI_FEATURES, SMCCC_VERSION, SMCCC_ARCH_FEATURES, Amlogic secure storage read-only calls 0x82000023-0x82000027, 0x82000060/61/63/64/65/67/6b/6c"
 
 /* 伪造命令表项 @name 直接过红线门：放行时返回 0、不打印、不动待确认动作 */
 static int expect_gate_passes(struct unit_test_state *uts, const char *name,
@@ -1003,6 +1003,59 @@ static int cmd_test_redline_smc(struct unit_test_state *uts)
 	return 0;
 }
 CMD_TEST(cmd_test_redline_smc, UTF_CONSOLE);
+
+/*
+ * Amlogic 厂商 BL31 安全存储：只读调用（取缓冲与块大小、QUERY/READ/TELL/VERIFY/STATUS/LIST、GET_ENCTYPE、VERSION）放行，供按规格手工做 RAM 级实验；改存储或 BL31 运行态的 WRITE、REMOVE、NOTIFY、NOTIFY_EX、SET_ENCTYPE 与 SET_STORAGE_INFO 拦，并叫出名字
+ */
+static int cmd_test_redline_smc_storage(struct unit_test_state *uts)
+{
+	static const char *const allowed[] = {
+		"0x82000023", "0x82000024", "0x82000025", "0x82000026", "0x82000027",
+		"0x82000060", "0x82000061", "0x82000063", "0x82000064", "0x82000065",
+		"0x82000067", "0x8200006b", "0x8200006c",
+	};
+	static const struct {
+		const char *fid;
+		const char *what;
+	} held[] = {
+		{ "0x82000062", "Amlogic secure storage: write (re-encrypts the block buffer)" },
+		{ "0x82000068", "Amlogic secure storage: remove (re-encrypts the block buffer)" },
+		{ "0x82000066", "Amlogic secure storage: notify (rebuilds the key table)" },
+		{ "0x82000069", "Amlogic secure storage: notify_ex (rebuilds the key table)" },
+		{ "0x8200006a", "Amlogic secure storage: set encryption type" },
+		{ "0x82000028", "Amlogic SiP: set storage info (AO register)" },
+	};
+	char *argv[] = { "smc", NULL, "0x40000" };
+	int i;
+
+	if (!IS_ENABLED(CONFIG_CMD_REDLINE))
+		return -EAGAIN;
+	run_command("redline cancel", 0);
+	for (i = 0; i < ARRAY_SIZE(allowed); i++) {
+		argv[1] = (char *)allowed[i];
+		ut_assertok(expect_gate_passes(uts, "smc", 2, argv));
+	}
+	ut_asserteq(1, run_command("redline show", 0));
+	ut_assert_nextline("redline: nothing pending");
+
+	for (i = 0; i < ARRAY_SIZE(held); i++) {
+		argv[1] = (char *)held[i].fid;
+		ut_assertok(expect_gate_holds(uts, "smc", 3, argv));
+		ut_assert_nextline("  command : smc %s 0x40000", held[i].fid);
+		ut_assert_nextline("  action  : secure monitor call (smc), function ID %s", held[i].fid);
+		ut_assert_nextline("  function: W0 %s = %s", held[i].fid, held[i].what);
+		ut_assert_nextline("  args    : x1 0x40000, x2 0x0, x3 0x0, x4 0x0, x5 0x0, x6 0x0, w7 0x0");
+		ut_assert_nextline(SMC_ALLOWED);
+		ut_assert_nextline(HINT);
+		ut_assert_console_end();
+	}
+
+	ut_assertok(run_command("redline cancel", 0));
+	console_record_reset();
+
+	return 0;
+}
+CMD_TEST(cmd_test_redline_smc_storage, UTF_CONSOLE);
 
 /* sm efusewrite：清单逐字节列出要烧的数据（参数按 simple_strtoul(…, 0) 解析：0x 十六进制、否则十进制）；超过 4 KiB 输入缓冲时注明会被拒绝；只读子命令放行，歧义的拦 */
 static int cmd_test_redline_efuse(struct unit_test_state *uts)
