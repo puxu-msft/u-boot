@@ -201,6 +201,11 @@
 		};
 	};
 
+	/* 厂商 BL31 安全存储的模型：unifykey 命令在 sandbox 里可用，供拿主机侧生成的 key 块做端到端验证 */
+	meson-secure-monitor {
+		compatible = "sandbox,meson-sm";
+	};
+
 	pci@0 {
 		pci@1e,0 {
 			compatible = "sandbox,pmc";

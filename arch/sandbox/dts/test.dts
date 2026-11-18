@@ -874,6 +874,10 @@
 		sm: secure-monitor {
 			compatible = "sandbox,sm";
 		};
+
+		meson-secure-monitor {
+			compatible = "sandbox,meson-sm";
+		};
 	};
 
 	fpga {

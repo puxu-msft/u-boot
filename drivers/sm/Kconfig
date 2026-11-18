@@ -15,3 +15,35 @@ config SANDBOX_SM
 	help
 	  Say y here to enable the Sandbox driver for the secure monitor
 	  uclass.
+
+config SANDBOX_MESON_SM
+	bool "Sandbox model of the Amlogic vendor BL31 secure storage"
+	depends on SANDBOX
+	select SM
+	select AES
+	select SHA256
+	help
+	  按 Amlogic 厂商 BL31（M12 上的 TF-A v1.3:079690f10）反汇编出的语义模拟它的安全存储调用（取共享缓冲、NOTIFY_EX 装载：块头魔数与 SHA-256、AES-256-CBC、内层头声明的块大小、逐对象 SHA-256；READ/TELL/STATUS/LIST/VERSION），eFuse 派生的密钥换成固定测试值；写、删等模型之外的调用返回 SMC_UNK 并计数。供 MESON_UNIFYKEY 与 unifykey 命令在 sandbox 里测试。
+
+config MESON_UNIFYKEY
+	bool "Amlogic unifykey (secure storage) client over the vendor BL31"
+	depends on MESON_SM || SANDBOX_MESON_SM
+	depends on BLK
+	select SHA256
+	help
+	  经 Amlogic 厂商 BL31 的安全存储读 unifykey（mac、deviceid、authkey 等出厂写入的 key）：从块设备分区读出加密块的两份副本，按厂商 u-boot 的规则（info 校验和、magic、stamp）选一份交给 BL31 装载，再按名字读。只读块设备，不写回（不做厂商的副本修复）；只发取缓冲、装载与只读查询的调用。BL31 没有这些调用（如上游 TF-A）时报告不支持。
+
+config MESON_UNIFYKEY_OFFSET
+	hex "Offset of the first key block copy in the partition"
+	depends on MESON_UNIFYKEY
+	default 0x4000
+	help
+	  第一份副本在分区（厂商 reserved）里的字节偏移；第二份紧随其后，两块 512 B 的 info 再随其后。默认值是厂商虚拟分区表里的 key 区（AML_TABLE 之后）。
+
+config MESON_UNIFYKEY_SIZE
+	hex "Size of one key block copy"
+	depends on MESON_UNIFYKEY
+	range 0x400 0x40000
+	default 0x40000
+	help
+	  一份副本（即交给 BL31 的块）的大小，也是 NOTIFY_EX 的参数；必须与块的内层头声明的大小相同，否则 BL31 清表。上限是 BL31 块缓冲的大小。

@@ -3249,6 +3249,14 @@ config CMD_MESON
 	help
 	  Enable useful commands for the Meson Soc family developed by Amlogic Inc.
 
+config CMD_UNIFYKEY
+	bool "unifykey - read Amlogic unifykey through the vendor BL31"
+	depends on MESON_SM || SANDBOX_MESON_SM
+	depends on BLK
+	select MESON_UNIFYKEY
+	help
+	  unifykey load <接口> <设备#分区>：把厂商 reserved 分区上的 key 块交给 BL31 装载（只读盘）；unifykey list；unifykey read <名字> <地址> [str]（str 时与厂商 keyman read … str 一样设同名环境变量）；unifykey ethaddr [<名字>]：把 MAC 类 key 设为 ethaddr。
+
 config CMD_SPAWN
 	bool "spawn and wait commands"
 	depends on UTHREAD

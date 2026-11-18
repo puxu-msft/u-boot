@@ -88,6 +88,9 @@ obj-$(CONFIG_VIDEO) += panel.o
 obj-$(CONFIG_EFI_PARTITION) += part.o
 ifeq ($(CONFIG_BLKMAP),y)
 obj-$(CONFIG_AML_PARTITION) += part_aml.o
+ifeq ($(CONFIG_AML_PARTITION)$(CONFIG_SANDBOX_MESON_SM),yy)
+obj-$(CONFIG_CMD_UNIFYKEY) += meson_unifykey.o
+endif
 endif
 obj-$(CONFIG_PCI) += pci.o
 obj-$(CONFIG_P2SB) += p2sb.o
