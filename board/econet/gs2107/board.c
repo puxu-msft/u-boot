@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: GPL-2.0+ */
 
+#include <bootm.h>
 #include <dm.h>
+#include <env.h>
 #include <init.h>
 #include <asm/io.h>
 #include <linux/bitops.h>
@@ -65,6 +67,36 @@ static void en7528_usb_init(void)
 	mdelay(1);
 }
 #endif
+
+/*
+ * 启动看门狗：timer 5（寄存器模型见 devices/gs2107/docs/27 §1，与内核 en7528_wdt 一致）。
+ * arch_preboot_os()（mach-en75xx/cache.c 的 en75xx_prepare_linux）在跳内核前把 CTRL 整个清零，
+ * 所以要在其后的 board_preboot_os() 里按需重新打开：默认 env 的 gs_nand_boot/gs_rescue_boot 在 bootm 前
+ * setenv gs_wdt 1。LOAD=0xffffffff 在 112.5 MHz 下约 38 s，内核 en7528_wdt 发现计时器在跑就接手代喂，
+ * 直到 procd 打开设备；这样内核早期卡死也会复位，bootcount 累加。gs_wdt 不在 env 可写白名单里，
+ * 存储的 env 设不了它。
+ */
+#define GS2107_WDT_CTRL		0xbfbf0100
+#define GS2107_WDT_LOAD		0xbfbf012c
+#define GS2107_WDT_RELOAD	0xbfbf0138
+#define GS2107_WDT_TIMER_ENABLE	BIT(5)
+#define GS2107_WDT_IRQ_ENABLE	BIT(21)
+#define GS2107_WDT_RESET_ENABLE	BIT(25)
+
+void board_preboot_os(void)
+{
+	u32 ctrl;
+
+	if (env_get_yesno("gs_wdt") != 1)
+		return;
+	__raw_writel(0xffffffff, (void __iomem *)GS2107_WDT_LOAD);
+	ctrl = __raw_readl((void __iomem *)GS2107_WDT_CTRL);
+	ctrl &= ~GS2107_WDT_IRQ_ENABLE;
+	ctrl |= GS2107_WDT_TIMER_ENABLE | GS2107_WDT_RESET_ENABLE;
+	__raw_writel(ctrl, (void __iomem *)GS2107_WDT_CTRL);
+	__raw_writel(1, (void __iomem *)GS2107_WDT_RELOAD);
+	printf("## GS2107: boot watchdog armed (~38 s, CTRL=%08x)\n", ctrl);
+}
 
 int board_init(void)
 {
