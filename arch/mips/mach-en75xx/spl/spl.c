@@ -4,11 +4,14 @@
 #include <init.h>
 #include <spl.h>
 #include <spl_load.h>
+#include <asm/cache.h>
 #include <mach/en75xx.h>
 
 void __noreturn board_init_f(ulong dummy)
 {
 	spl_init();
+	/* 探测缓存行长（含 L2）：跳 U-Boot proper 前的 flush_cache 要把映像从 L2 也写回，proper 开 MIPS_CACHE_SETUP 时会按索引清掉整个 L2 */
+	mips_cache_probe();
 
 	if (IS_ENABLED(CONFIG_SPL_SERIAL))
 		preloader_console_init();

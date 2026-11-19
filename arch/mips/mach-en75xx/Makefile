@@ -10,6 +10,6 @@ obj-y += early_sfc.o
 obj-y += spl/
 else
 # U-Boot proper
-obj-y += cache.o
+obj-y += preboot.o
 endif
 endif

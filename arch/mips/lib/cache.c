@@ -160,6 +160,18 @@ void __weak flush_dcache_range(ulong start_addr, ulong stop)
 	sync();
 }
 
+/*
+ * 范围首尾所在的缓存行若有一部分在 [start, stop) 之外，对这一行执行 op（写回作废）：同一行里范围外的字节属于别的对象，可能还是脏的，直接作废会把它们丢掉。
+ */
+#define cache_wbinv_partial_lines(start, stop, lsize, op) do {		\
+	if (!(lsize))							\
+		break;							\
+	if ((start) & ((lsize) - 1))					\
+		mips_cache(op, (const void *)((start) & ~((lsize) - 1)));	\
+	if ((stop) & ((lsize) - 1))					\
+		mips_cache(op, (const void *)(((stop) - 1) & ~((lsize) - 1))); \
+} while (0)
+
 void __weak invalidate_dcache_range(ulong start_addr, ulong stop)
 {
 	unsigned long lsize = dcache_line_size();
@@ -169,10 +181,16 @@ void __weak invalidate_dcache_range(ulong start_addr, ulong stop)
 	if (start_addr == stop)
 		return;
 
-	/* invalidate L2 cache */
-	cache_loop(start_addr, stop, slsize, HIT_INVALIDATE_SD);
+	/*
+	 * 先把只有一部分在范围内的首尾两行写回作废，再整段作废，同 Linux arch/mips/mm/c-r4k.c 的 r4k_dma_cache_inv。L1 在前：它写回的脏数据落在 L2，紧接着由 L2 的写回送到内存。整段作废同样先 L1 后 L2，免得 L1 里范围内的脏行在 L2 作废之后才被逐出、又落进 L2。
+	 */
+	cache_wbinv_partial_lines(start_addr, stop, lsize, HIT_WRITEBACK_INV_D);
+	cache_wbinv_partial_lines(start_addr, stop, slsize, HIT_WRITEBACK_INV_SD);
 
 	cache_loop(start_addr, stop, lsize, HIT_INVALIDATE_D);
+
+	/* invalidate L2 cache */
+	cache_loop(start_addr, stop, slsize, HIT_INVALIDATE_SD);
 
 	/* ensure cache ops complete before any further memory accesses */
 	sync();

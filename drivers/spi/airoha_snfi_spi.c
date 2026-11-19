@@ -26,27 +26,6 @@
 #include <spi.h>
 #include <spi-mem.h>
 
-#if IS_ENABLED(CONFIG_ARCH_EN75XX)
-#include <asm/addrspace.h>
-/*
- * EN7528 (MIPS 1004Kc) DMA coherency.
- *
- * This SoC inherits its cache setup from the vendor bootbase and U-Boot runs
- * with CONFIG_MIPS_CACHE_SETUP disabled, where the dcache flush/invalidate
- * primitives are not reliable.  dma_map_single() therefore cannot make the
- * shared buffer coherent: a multi-page read returns the same stale cache line
- * for every page.  Use the uncached KSEG1 alias for all CPU accesses to the
- * DMA buffer and give the controller the physical address instead.
- * (Same remedy as the airoha_eth ring/frame buffers on this SoC.)
- */
-#define snfi_uncached(p)	((void *)CKSEG1ADDR((unsigned long)(p)))
-#define snfi_dma_addr(p, l, d)	((dma_addr_t)CPHYSADDR((unsigned long)(p)))
-#define snfi_dma_unmap(a, l, d)	do { } while (0)
-#else
-#define snfi_uncached(p)	(p)
-#define snfi_dma_addr(p, l, d)	dma_map_single((p), (l), (d))
-#define snfi_dma_unmap(a, l, d)	dma_unmap_single((a), (l), (d))
-#endif
 
 /* SPI */
 #define REG_SPI_CTRL_READ_MODE			0x0000
@@ -901,12 +880,12 @@ static ssize_t airoha_snand_dirmap_read(struct spi_mem_dirmap_desc *desc,
 	if (err)
 		goto error_dma_mode_off;
 
-	dma_addr = snfi_dma_addr(txrx_buf, SPI_NAND_CACHE_SIZE,
+	dma_addr = dma_map_single(txrx_buf, SPI_NAND_CACHE_SIZE,
 				  DMA_FROM_DEVICE);
 
-	/* set dma addr */
+	/* 设置 DMA 地址：控制器要物理地址，dma_map_single() 返回的是 CPU 地址（MIPS 上在 KSEG0） */
 	err = regmap_write(priv->regmap_nfi, REG_SPI_NFI_STRADDR,
-			   dma_addr);
+			   virt_to_phys(txrx_buf));
 	if (err)
 		goto error_dma_unmap;
 
@@ -983,7 +962,7 @@ static ssize_t airoha_snand_dirmap_read(struct spi_mem_dirmap_desc *desc,
 	/* DMA read need delay for data ready from controller to DRAM */
 	udelay(1);
 
-	snfi_dma_unmap(dma_addr, SPI_NAND_CACHE_SIZE, DMA_FROM_DEVICE);
+	dma_unmap_single(dma_addr, SPI_NAND_CACHE_SIZE, DMA_FROM_DEVICE);
 
 	err = airoha_snand_set_mode(priv, SPI_MODE_MANUAL);
 	if (err < 0)
@@ -994,7 +973,7 @@ static ssize_t airoha_snand_dirmap_read(struct spi_mem_dirmap_desc *desc,
 	return len;
 
 error_dma_unmap:
-	snfi_dma_unmap(dma_addr, SPI_NAND_CACHE_SIZE, DMA_FROM_DEVICE);
+	dma_unmap_single(dma_addr, SPI_NAND_CACHE_SIZE, DMA_FROM_DEVICE);
 error_dma_mode_off:
 	airoha_snand_set_mode(priv, SPI_MODE_MANUAL);
 	return err;
@@ -1088,12 +1067,12 @@ static ssize_t airoha_snand_dirmap_write(struct spi_mem_dirmap_desc *desc,
 	if (err)
 		goto error_dma_mode_off;
 
-	dma_addr = snfi_dma_addr(txrx_buf, SPI_NAND_CACHE_SIZE,
+	dma_addr = dma_map_single(txrx_buf, SPI_NAND_CACHE_SIZE,
 				  DMA_TO_DEVICE);
 
-	/* set dma addr */
+	/* 设置 DMA 地址：控制器要物理地址，dma_map_single() 返回的是 CPU 地址（MIPS 上在 KSEG0） */
 	err = regmap_write(priv->regmap_nfi, REG_SPI_NFI_STRADDR,
-			   dma_addr);
+			   virt_to_phys(txrx_buf));
 	if (err)
 		goto error_dma_unmap;
 
@@ -1170,7 +1149,7 @@ static ssize_t airoha_snand_dirmap_write(struct spi_mem_dirmap_desc *desc,
 	if (err)
 		goto error_dma_unmap;
 
-	snfi_dma_unmap(dma_addr, SPI_NAND_CACHE_SIZE, DMA_TO_DEVICE);
+	dma_unmap_single(dma_addr, SPI_NAND_CACHE_SIZE, DMA_TO_DEVICE);
 
 	err = airoha_snand_set_mode(priv, SPI_MODE_MANUAL);
 	if (err < 0)
@@ -1179,7 +1158,7 @@ static ssize_t airoha_snand_dirmap_write(struct spi_mem_dirmap_desc *desc,
 	return len;
 
 error_dma_unmap:
-	snfi_dma_unmap(dma_addr, SPI_NAND_CACHE_SIZE, DMA_TO_DEVICE);
+	dma_unmap_single(dma_addr, SPI_NAND_CACHE_SIZE, DMA_TO_DEVICE);
 error_dma_mode_off:
 	airoha_snand_set_mode(priv, SPI_MODE_MANUAL);
 	return err;
@@ -1341,13 +1320,11 @@ static int airoha_snand_probe(struct udevice *dev)
 	u32 boot_trp, snf_nfi_cnfg, sfc_strap;
 	int ret;
 
-	void *txrx_buf = memalign(ARCH_DMA_MINALIGN, SPI_NAND_CACHE_SIZE);
-
-	if (!txrx_buf) {
+	priv->txrx_buf = memalign(ARCH_DMA_MINALIGN, SPI_NAND_CACHE_SIZE);
+	if (!priv->txrx_buf) {
 		dev_err(dev, "failed to allocate memory for dirmap\n");
 		return -ENOMEM;
 	}
-	priv->txrx_buf = snfi_uncached(txrx_buf);
 	priv->dev = dev;
 	priv->en751221 = of_machine_is_compatible("econet,en751221") ||
 			   of_machine_is_compatible("econet,en7512") ||

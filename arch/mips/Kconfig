@@ -94,6 +94,7 @@ config ARCH_EN75XX
 	select DM
 	select DM_SERIAL
 	select EN75XX_SERIAL
+	select MIPS_L2_CACHE
 	select OF_CONTROL
 	select ROM_EXCEPTION_VECTORS
 	select SUPPORT_BIG_ENDIAN

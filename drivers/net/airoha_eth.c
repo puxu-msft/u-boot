@@ -28,9 +28,6 @@
 #include <linux/iopoll.h>
 #include <linux/mii.h>
 #include <linux/time.h>
-#if IS_ENABLED(CONFIG_ARCH_EN75XX)
-#include <asm/addrspace.h>	/* CKSEG1ADDR: uncached DMA-ring alias */
-#endif
 #if IS_ENABLED(CONFIG_ARCH_AIROHA)
 #include <asm/arch/scu-regmap.h>
 #endif
@@ -401,12 +398,6 @@ struct airoha_queue {
 	u16 head;
 
 	int ndesc;
-
-	/* Uncached TX bounce buffer: the same broken-flush issue means a CPU-
-	 * built packet in cached memory is not guaranteed to be in DRAM when the
-	 * QDMA reads it, so copy each TX frame through this uncached buffer. */
-	void *bounce;
-	unsigned long bounce_phys;
 };
 
 struct airoha_tx_irq_queue {
@@ -552,28 +543,6 @@ static inline void dma_unmap_unaligned(dma_addr_t addr, size_t len,
 	dma_unmap_single(start, end - start, dir);
 }
 
-static void *airoha_dma_alloc_coherent(size_t size, unsigned long *dma_addr)
-{
-#if IS_ENABLED(CONFIG_ARCH_EN75XX)
-	void *buf;
-
-	size = ALIGN(size, ARCH_DMA_MINALIGN);
-	buf = memalign(ARCH_DMA_MINALIGN, size);
-	if (!buf)
-		return NULL;
-
-	*dma_addr = virt_to_phys(buf);
-	/*
-	 * EN7528 CM L2 has no Hit_Writeback_Inv_SD (op 0x17 hangs). DMA-shared
-	 * rings must therefore live in KSEG1 so CPU stores reach DRAM without
-	 * an L2 writeback. QDMA then sees descriptors by construction.
-	 */
-	return (void *)CKSEG1ADDR((unsigned long)buf);
-#else
-	return dma_alloc_coherent(size, dma_addr);
-#endif
-}
-
 static bool airoha_is_en751221(struct airoha_eth *eth)
 {
 	return eth->soc->econet;
@@ -638,6 +607,25 @@ static int airoha_fe_init(struct airoha_gdm_port *port)
 	return 0;
 }
 
+/*
+ * 一致内存经不缓存别名写往 DRAM，QDMA 的寄存器写去往另一个总线目标；寄存器写让 QDMA 去读这些内存之前，先保证它们已经落地。Linux 的 MIPS writel 写寄存器前先做 iobarrier_rw()（sync），U-Boot 的 writel 不带屏障，wmb() 在本配置（无 CONFIG_CPU_HAS_WB）下也只是 nop，所以 MIPS 上显式 sync。
+ */
+static void en751221_dma_wmb(void)
+{
+#ifdef CONFIG_MIPS
+	sync();
+#else
+	wmb();
+#endif
+}
+
+/* 写 CPU 索引把描述符交给 QDMA */
+static void en751221_qdma_kick(struct airoha_qdma *qdma, u32 reg, u32 index)
+{
+	en751221_dma_wmb();
+	airoha_qdma_wr(qdma, reg, index);
+}
+
 static void en751221_qdma_reset_rx_desc(struct airoha_queue *q, int index)
 {
 	struct airoha_qdma_desc *desc = &q->desc[index];
@@ -656,8 +644,6 @@ static void en751221_qdma_reset_rx_desc(struct airoha_queue *q, int index)
 	WRITE_ONCE(desc->msg1, 0);
 	WRITE_ONCE(desc->msg2, 0);
 	WRITE_ONCE(desc->msg3, 0);
-
-	dma_map_unaligned(desc, sizeof(*desc), DMA_TO_DEVICE);
 }
 
 static void en751221_qdma_init_rx_desc(struct airoha_qdma *qdma)
@@ -670,7 +656,7 @@ static void en751221_qdma_init_rx_desc(struct airoha_qdma *qdma)
 
 	/* On EN751221, equal CPU/HW indices mean that the RX ring is full. */
 	q->head = 0;
-	airoha_qdma_wr(qdma, EN751221_REG_RX_CPU_IDX, 0);
+	en751221_qdma_kick(qdma, EN751221_REG_RX_CPU_IDX, 0);
 	airoha_qdma_wr(qdma, EN751221_REG_RX_DMA_IDX, 1);
 }
 
@@ -680,7 +666,7 @@ static int en751221_qdma_init_rx(struct airoha_qdma *qdma)
 	unsigned long dma_addr;
 
 	q->ndesc = RX_DSCP_NUM;
-	q->desc = airoha_dma_alloc_coherent(q->ndesc * sizeof(*q->desc), &dma_addr);
+	q->desc = dma_alloc_coherent(q->ndesc * sizeof(*q->desc), &dma_addr);
 	if (!q->desc)
 		return -ENOMEM;
 
@@ -689,7 +675,7 @@ static int en751221_qdma_init_rx(struct airoha_qdma *qdma)
 	airoha_qdma_wr(qdma, EN751221_REG_RX_RING_SIZE, q->ndesc);
 	airoha_qdma_wr(qdma, EN751221_REG_RX_RING_THR, 0);
 
-	en751221_qdma_init_rx_desc(qdma);
+	/* 收包缓冲在 eth start 时才挂（en751221_qdma_init_rx_desc）：probe 时 net_rx_packets[] 还没由 net_init 赋值 */
 	return 0;
 }
 
@@ -700,7 +686,7 @@ static int en751221_qdma_init_tx(struct airoha_qdma *qdma)
 
 	q->ndesc = TX_DSCP_NUM;
 	q->head = 0;
-	q->desc = airoha_dma_alloc_coherent(q->ndesc * sizeof(*q->desc), &dma_addr);
+	q->desc = dma_alloc_coherent(q->ndesc * sizeof(*q->desc), &dma_addr);
 	if (!q->desc)
 		return -ENOMEM;
 
@@ -708,11 +694,6 @@ static int en751221_qdma_init_tx(struct airoha_qdma *qdma)
 	airoha_qdma_wr(qdma, EN751221_REG_TX_RING_BASE, dma_addr);
 	airoha_qdma_wr(qdma, EN751221_REG_TX_CPU_IDX, 0);
 	airoha_qdma_wr(qdma, EN751221_REG_TX_DMA_IDX, 0);
-
-	q->bounce = airoha_dma_alloc_coherent(AIROHA_MAX_PACKET_SIZE,
-					      &q->bounce_phys);
-	if (!q->bounce)
-		return -ENOMEM;
 
 	return 0;
 }
@@ -724,14 +705,12 @@ static int en751221_qdma_init_tx_irq(struct airoha_qdma *qdma)
 	u32 cfg;
 
 	irq_q->size = EN751221_IRQ_QUEUE_LEN;
-	irq_q->q = airoha_dma_alloc_coherent(irq_q->size * sizeof(u32),
-					     &dma_addr);
+	irq_q->q = dma_alloc_coherent(irq_q->size * sizeof(u32), &dma_addr);
 	if (!irq_q->q)
 		return -ENOMEM;
 
 	irq_q->qdma = qdma;
 	memset(irq_q->q, 0xff, irq_q->size * sizeof(u32));
-	dma_map_single(irq_q->q, irq_q->size * sizeof(u32), DMA_TO_DEVICE);
 
 	airoha_qdma_wr(qdma, EN751221_REG_IRQ_BASE, dma_addr);
 	cfg = FIELD_PREP(EN751221_IRQ_THRESHOLD_MASK,
@@ -747,7 +726,6 @@ static void en751221_qdma_reset_tx(struct airoha_qdma *qdma)
 	struct airoha_queue *q = &qdma->q_tx[0];
 
 	memset(q->desc, 0, q->ndesc * sizeof(*q->desc));
-	dma_map_single(q->desc, q->ndesc * sizeof(*q->desc), DMA_TO_DEVICE);
 	q->head = 0;
 	airoha_qdma_wr(qdma, EN751221_REG_TX_CPU_IDX, 0);
 	airoha_qdma_wr(qdma, EN751221_REG_TX_DMA_IDX, 0);
@@ -760,19 +738,17 @@ static int en751221_qdma_init_hfwd(struct airoha_qdma *qdma)
 	int size;
 
 	size = EN751221_HW_DSCP_NUM * sizeof(struct en751221_qdma_fwd_desc);
-	qdma->hfwd.desc = airoha_dma_alloc_coherent(size, &dma_addr);
+	qdma->hfwd.desc = dma_alloc_coherent(size, &dma_addr);
 	if (!qdma->hfwd.desc)
 		return -ENOMEM;
 	memset(qdma->hfwd.desc, 0, size);
-	dma_map_single(qdma->hfwd.desc, size, DMA_TO_DEVICE);
 	airoha_qdma_wr(qdma, EN751221_REG_FWD_DSCP_BASE, dma_addr);
 
 	size = AIROHA_MAX_PACKET_SIZE * EN751221_HW_DSCP_NUM;
-	qdma->hfwd.q = airoha_dma_alloc_coherent(size, &dma_addr);
+	qdma->hfwd.q = dma_alloc_coherent(size, &dma_addr);
 	if (!qdma->hfwd.q)
 		return -ENOMEM;
 	memset(qdma->hfwd.q, 0, size);
-	dma_map_single(qdma->hfwd.q, size, DMA_TO_DEVICE);
 	airoha_qdma_wr(qdma, EN751221_REG_FWD_BUF_BASE, dma_addr);
 
 	/* en7528 stock: low_thr = 32 (hwf_cfg = 0x20), not 1. */
@@ -791,6 +767,8 @@ static int en751221_qdma_init_hfwd(struct airoha_qdma *qdma)
 	      FIELD_PREP(EN751221_HWFWD_OVERHEAD_MASK, 0x14) |
 	      FIELD_PREP(EN751221_HWFWD_DESC_NUM_MASK,
 			 EN751221_HW_DSCP_NUM);
+	/* 上面经不缓存别名清零的转发描述符与缓冲先落地，再让 LMGR 开始初始化 */
+	en751221_dma_wmb();
 	airoha_qdma_wr(qdma, EN751221_REG_LMGR_INIT_CFG, val);
 
 	return read_poll_timeout(airoha_qdma_rr, status,
@@ -887,7 +865,7 @@ static int airoha_qdma_init_rx_queue(struct airoha_queue *q,
 	q->ndesc = ndesc;
 	q->head = 0;
 
-	q->desc = airoha_dma_alloc_coherent(q->ndesc * sizeof(*q->desc), &dma_addr);
+	q->desc = dma_alloc_coherent(q->ndesc * sizeof(*q->desc), &dma_addr);
 	if (!q->desc)
 		return -ENOMEM;
 
@@ -934,7 +912,7 @@ static int airoha_qdma_init_tx_queue(struct airoha_queue *q,
 	q->ndesc = size;
 	q->head = 0;
 
-	q->desc = airoha_dma_alloc_coherent(q->ndesc * sizeof(*q->desc), &dma_addr);
+	q->desc = dma_alloc_coherent(q->ndesc * sizeof(*q->desc), &dma_addr);
 	if (!q->desc)
 		return -ENOMEM;
 
@@ -956,7 +934,7 @@ static int airoha_qdma_tx_irq_init(struct airoha_tx_irq_queue *irq_q,
 	int id = irq_q - &qdma->q_tx_irq[0];
 	unsigned long dma_addr;
 
-	irq_q->q = airoha_dma_alloc_coherent(size * sizeof(u32), &dma_addr);
+	irq_q->q = dma_alloc_coherent(size * sizeof(u32), &dma_addr);
 	if (!irq_q->q)
 		return -ENOMEM;
 
@@ -1001,7 +979,7 @@ static int airoha_qdma_init_hfwd_queues(struct airoha_qdma *qdma)
 	int size;
 
 	size = HW_DSCP_NUM * sizeof(struct airoha_qdma_fwd_desc);
-	qdma->hfwd.desc = airoha_dma_alloc_coherent(size, &dma_addr);
+	qdma->hfwd.desc = dma_alloc_coherent(size, &dma_addr);
 	if (!qdma->hfwd.desc)
 		return -ENOMEM;
 
@@ -1011,7 +989,7 @@ static int airoha_qdma_init_hfwd_queues(struct airoha_qdma *qdma)
 	airoha_qdma_wr(qdma, REG_FWD_DSCP_BASE, dma_addr);
 
 	size = AIROHA_MAX_PACKET_SIZE * HW_DSCP_NUM;
-	qdma->hfwd.q = airoha_dma_alloc_coherent(size, &dma_addr);
+	qdma->hfwd.q = dma_alloc_coherent(size, &dma_addr);
 	if (!qdma->hfwd.q)
 		return -ENOMEM;
 
@@ -1686,22 +1664,19 @@ static int en751221_eth_send(struct udevice *dev, void *packet, int length)
 	struct airoha_queue *q = &qdma->q_tx[0];
 	struct airoha_qdma_desc *desc;
 	u32 index, next, ctrl = 0, irq_status = 0;
+	dma_addr_t dma_addr;
 	int i;
 
 	index = q->head;
 	next = (index + 1) % q->ndesc;
 	desc = &q->desc[index];
 
-	/*
-	 * Stage the frame in the KSEG1 bounce buffer (see
-	 * airoha_dma_alloc_coherent). desc and bounce are uncached, so the
-	 * writes land in DRAM; no map/flush.
-	 */
-	memcpy(q->bounce, packet, length);
+	/* QDMA 直接从 packet 取帧（对起始地址没有对齐要求，Linux econet_eth 同样直接映射 skb->data）；描述符在一致内存里，不用映射 */
+	dma_addr = dma_map_single(packet, length, DMA_TO_DEVICE);
 
 	WRITE_ONCE(desc->rsv, 0);
 	WRITE_ONCE(desc->ctrl, FIELD_PREP(QDMA_DESC_LEN_MASK, length));
-	WRITE_ONCE(desc->addr, q->bounce_phys);
+	WRITE_ONCE(desc->addr, virt_to_phys(packet));
 	WRITE_ONCE(desc->data, next);
 	WRITE_ONCE(desc->msg0,
 		   FIELD_PREP(EN751221_TXMSG_CHANNEL_MASK, 0) |
@@ -1712,7 +1687,7 @@ static int en751221_eth_send(struct udevice *dev, void *packet, int length)
 	WRITE_ONCE(desc->msg2, 0);
 	WRITE_ONCE(desc->msg3, 0);
 
-	airoha_qdma_wr(qdma, EN751221_REG_TX_CPU_IDX, next);
+	en751221_qdma_kick(qdma, EN751221_REG_TX_CPU_IDX, next);
 
 	for (i = 0; i < 10000; i++) {
 		ctrl = READ_ONCE(desc->ctrl);
@@ -1720,6 +1695,7 @@ static int en751221_eth_send(struct udevice *dev, void *packet, int length)
 			break;
 		udelay(1);
 	}
+	dma_unmap_single(dma_addr, length, DMA_TO_DEVICE);
 
 	if (!(ctrl & QDMA_DESC_DONE_MASK))
 		return -ETIMEDOUT;
@@ -1753,7 +1729,7 @@ static int en751221_eth_recv(struct udevice *dev, uchar **packetp)
 	struct airoha_queue *q = &qdma->q_rx[0];
 	struct airoha_qdma_desc *desc;
 	uchar *rx_packet;
-	u32 index, hw_index, length, addr;
+	u32 index, hw_index, length;
 
 	index = (q->head + 1) % q->ndesc;
 	hw_index = airoha_qdma_rr(qdma, EN751221_REG_RX_DMA_IDX) &
@@ -1762,23 +1738,17 @@ static int en751221_eth_recv(struct udevice *dev, uchar **packetp)
 		return -EAGAIN;
 
 	desc = &q->desc[index];
-	dma_unmap_unaligned((dma_addr_t)desc, sizeof(*desc),
-			    DMA_FROM_DEVICE);
 	length = FIELD_GET(QDMA_DESC_LEN_MASK, READ_ONCE(desc->ctrl));
-	addr = READ_ONCE(desc->addr);
 	if (!length || length > PKTSIZE_ALIGN) {
 		en751221_qdma_reset_rx_desc(q, index);
-		airoha_qdma_wr(qdma, EN751221_REG_RX_CPU_IDX, index);
+		en751221_qdma_kick(qdma, EN751221_REG_RX_CPU_IDX, index);
 		q->head = index;
 		return -EIO;
 	}
 
-	/*
-	 * Hand U-Boot the KSEG1 alias of the received frame. QDMA wrote DRAM
-	 * directly; a cached read can still hit a stale L2 line because this
-	 * CM cannot Hit_Writeback_Inv_SD (see airoha_dma_alloc_coherent).
-	 */
-	rx_packet = (uchar *)CKSEG1ADDR((unsigned long)addr);
+	/* 描述符 index 挂的是 net_rx_packets[index]（en751221_qdma_reset_rx_desc）；作废 DMA 期间可能进到缓存的行，再把它的缓存地址交给协议栈 */
+	rx_packet = net_rx_packets[index];
+	dma_unmap_single((dma_addr_t)rx_packet, PKTSIZE_ALIGN, DMA_FROM_DEVICE);
 	*packetp = rx_packet;
 
 	return length;
@@ -1796,7 +1766,7 @@ static int en751221_eth_free_pkt(struct udevice *dev, uchar *packet)
 
 	index = (q->head + 1) % q->ndesc;
 	en751221_qdma_reset_rx_desc(q, index);
-	airoha_qdma_wr(qdma, EN751221_REG_RX_CPU_IDX, index);
+	en751221_qdma_kick(qdma, EN751221_REG_RX_CPU_IDX, index);
 	q->head = index;
 
 	return 0;

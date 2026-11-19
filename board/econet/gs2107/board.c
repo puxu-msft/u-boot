@@ -70,7 +70,7 @@ static void en7528_usb_init(void)
 
 /*
  * 启动看门狗：timer 5（寄存器模型见 devices/gs2107/docs/27 §1，与内核 en7528_wdt 一致）。
- * arch_preboot_os()（mach-en75xx/cache.c 的 en75xx_prepare_linux）在跳内核前把 CTRL 整个清零，
+ * arch_preboot_os()（mach-en75xx/preboot.c 的 en75xx_prepare_linux）在跳内核前把 CTRL 整个清零，
  * 所以要在其后的 board_preboot_os() 里按需重新打开：默认 env 的 gs_nand_boot/gs_rescue_boot 在 bootm 前
  * setenv gs_wdt 1。LOAD=0xffffffff 在 112.5 MHz 下约 38 s，内核 en7528_wdt 发现计时器在跑就接手代喂，
  * 直到 procd 打开设备；这样内核早期卡死也会复位，bootcount 累加。gs_wdt 不在 env 可写白名单里，
