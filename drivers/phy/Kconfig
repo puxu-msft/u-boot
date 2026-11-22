@@ -260,6 +260,13 @@ config MT76X8_USB_PHY
 
 	  This PHY is found on MT76x8 devices supporting USB.
 
+config PHY_EN7528_USB
+	bool "EcoNet EN7528 USB PHY support"
+	depends on PHY
+	depends on SOC_EN7528
+	help
+	  EcoNet EN7528 的 USB2/USB3 PHY：打开两个 U2 口、调 U3 接收端阻抗，并用片上频率计校准 U2 的 HS 发送斜率。
+
 config PHY_EXYNOS_USBDRD
 	bool "Exynos SoC series USB DRD PHY driver"
 	depends on PHY && CLK

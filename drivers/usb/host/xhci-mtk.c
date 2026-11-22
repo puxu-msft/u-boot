@@ -216,8 +216,9 @@ static int xhci_mtk_ofdata_get(struct mtk_xhci *mtk)
 
 	dev_info(dev, "hcd: 0x%p, ippc: 0x%p\n", mtk->hcd, mtk->ippc);
 
+	/* 时钟是可选的（同 Linux 的 devm_clk_bulk_get_optional）：没有 clocks 属性就当作没有时钟 */
 	ret = clk_get_bulk(dev, &mtk->clks);
-	if (ret) {
+	if (ret && ret != -ENOENT) {
 		dev_err(dev, "failed to get clocks %d!\n", ret);
 		return ret;
 	}
@@ -327,8 +328,14 @@ static int xhci_mtk_probe(struct udevice *dev)
 	hcor = (struct xhci_hcor *)((uintptr_t)mtk->hcd +
 			HC_LENGTH(xhci_readl(&mtk->hcd->cr_capbase)));
 
-	return xhci_register(dev, mtk->hcd, hcor);
+	ret = xhci_register(dev, mtk->hcd, hcor);
+	if (ret)
+		goto register_err;
 
+	return 0;
+
+	/* xhci_register 失败时不给 IP 断电，留着寄存器现场供排查（Linux 的 probe 出错路径同样不断电）；PHY 照常退出，下次 probe（usb reset）才会重新初始化、校准 */
+register_err:
 ssusb_init_err:
 	xhci_mtk_phy_shutdown(mtk);
 phys_err:
@@ -345,6 +352,7 @@ static int xhci_mtk_remove(struct udevice *dev)
 
 	xhci_deregister(dev);
 	xhci_mtk_host_disable(mtk);
+	xhci_mtk_phy_shutdown(mtk);
 	xhci_mtk_ldos_disable(mtk);
 	clk_disable_bulk(&mtk->clks);
 
@@ -354,6 +362,7 @@ static int xhci_mtk_remove(struct udevice *dev)
 static const struct udevice_id xhci_mtk_ids[] = {
 	{ .compatible = "mediatek,mtk-xhci" },
 	{ .compatible = "mediatek,mt8195-xhci" },
+	{ .compatible = "econet,en7528-xhci" },
 	{ }
 };
 
@@ -366,5 +375,6 @@ U_BOOT_DRIVER(xhci_mtk) = {
 	.ops = &xhci_usb_ops,
 	.bind = dm_scan_fdt_dev,
 	.priv_auto	= sizeof(struct mtk_xhci),
-	.flags = DM_FLAG_ALLOC_PRIV_DMA,
+	/* DM_FLAG_OS_PREPARE：bootm 跳内核前 dm_remove_devices_active() 调 remove，停下主控并下电，免得主控带着 U-Boot 的环与 DMA 进入内核 */
+	.flags = DM_FLAG_ALLOC_PRIV_DMA | DM_FLAG_OS_PREPARE,
 };

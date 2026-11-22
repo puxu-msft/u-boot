@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0+
 /* EcoNet/Airoha EN7528 (MIPS 1004Kc, little-endian) */
 
+#include <dt-bindings/phy/phy.h>
+
 / {
 	#address-cells = <1>;
 	#size-cells = <1>;
@@ -27,22 +29,6 @@
 		/* Capped below the 0x1fxxxxxx MMIO island; DDR stage
 		 * publishes the true size at runtime (dram_init). */
 		reg = <0x00000000 0x10000000>;
-	};
-
-	/* Dummy clock/phy so xhci-mtk's mandatory clk_get_bulk()/
-	 * generic_phy_get_bulk() succeed without an en7528 SCU clock or
-	 * T-PHY driver; the real USB clock is left ungated by the bootbase
-	 * and the xHCI IPPC block does the port power-up. */
-	usb_clk: usb-clk {
-		compatible = "fixed-clock";
-		#clock-cells = <0>;
-		clock-frequency = <24000000>;
-	};
-
-	usb_phy: usb-phy {
-		compatible = "nop-phy";
-		#phy-cells = <0>;
-		clocks = <&usb_clk>;	/* nop_phy_probe() calls clk_get_bulk() */
 	};
 
 	/* 定时器块的计数时钟（GS2107 实测 112.5 MHz：Linux en7528_wdt 开 timer 5 不开复位，110.07 ms 计 12,382,778） */
@@ -126,31 +112,24 @@
 			};
 		};
 
+		usb_phy: usb-phy@1fa80000 {
+			compatible = "econet,en7528-usb-phy";
+			reg = <0x1fa80000 0x1400>;
+			#phy-cells = <1>;
+		};
+
 		/*
-		 * USB3 host = MediaTek xHCI (same IP as mt8173), driven by
-		 * U-Boot's xhci-mtk. "mac" is the xHCI MMIO, "ippc" the IP port
-		 * control block (a sub-region of the USB T-PHY window). The
-		 * en7528 USB clock is ungated by the bootbase (the kernel node
-		 * carries no clocks either) so &usb_clk is a dummy fixed-clock
-		 * to satisfy clk_get_bulk(); &usb_phy is a nop-phy (the xHCI
-		 * IPPC block powers the ports up itself). USB reset/PHY-reset are
-		 * released by a direct SCU poke in board_late_init (there is no
-		 * DM reset provider in this port — see board.c).
+		 * USB 主控是 MediaTek xHCI（与 mt8173 同一 IP），由 xhci-mtk 驱动。"mac" 是 xHCI 寄存器，"ippc" 是紧随其后的 IP 端口控制块，地址与原厂 3.18 内核的 "u3h"/"ippc" 资源及 OpenWrt 的 en7528.dtsi 相同；xhci-mtk 在 probe 时经 IPPC 软复位整个 IP，再给主控和各口上电。与 Linux 的节点一样不带 clocks。
+		 *
+		 * U3 口（EN7528 只有一个）用 mediatek,u3p-dis-msk 关掉，只起 USB2：U-Boot 读 U 盘用 HS 就够。要开 U3 时去掉该属性，并按 OpenWrt 的 915 补丁补上 LTSSM 时序参数。
 		 */
 		usb: usb@1fb90000 {
-			compatible = "mediatek,mtk-xhci";
-			reg = <0x1fb90000 0x4000>,
-			      <0x1fa80700 0x100>;
+			compatible = "econet,en7528-xhci", "mediatek,mtk-xhci";
+			reg = <0x1fb90000 0x3e00>,
+			      <0x1fb93e00 0x100>;
 			reg-names = "mac", "ippc";
-			clocks = <&usb_clk>;
-			phys = <&usb_phy>;
-			/*
-			 * USB2-only: the U3/SerDes path needs SCU/serdes config
-			 * we don't do, and leaving U3 enabled makes xhci-mtk stall
-			 * on an unstable U3 clock (per the Airoha AN7581 USB PHY
-			 * commit). Disable both U3 ports so only USB2 is brought up.
-			 */
-			mediatek,u3p-dis-msk = <0x3>;
+			phys = <&usb_phy PHY_TYPE_USB2>, <&usb_phy PHY_TYPE_USB3>;
+			mediatek,u3p-dis-msk = <0x1>;
 			status = "disabled";
 		};
 
