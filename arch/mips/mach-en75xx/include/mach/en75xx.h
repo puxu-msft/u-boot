@@ -31,6 +31,9 @@
 #define EN75XX_SCREG_WR0		(EN75XX_SYSCTL_BASE + 0x280)
 #define EN75XX_REG_SAVE_INFO		(EN75XX_SYSCTL_BASE + 0x284)
 
+/* 物理地址低端窗口里能当 RAM 用的上限（448 MiB）：0x1c000000 起留给外设映射（寄存器岛在 0x1fa00000 起），512 MiB 的 DDR 只用得到前 448 MiB。厂商内核按 448 MiB 初始化 QDMA 缓冲（cal_qdma_init_buffer(448)），Linux 侧各板 DTS 的 /memory 也是这个值 */
+#define EN75XX_RAM_WINDOW_SIZE		0x1c000000
+
 /* --- Flash image layout: DDR blob offset is common; SPL/U-Boot offsets
  *     differ because the EN7528 DDR blob is much larger (see below). --- */
 #define EN75XX_DDR_BLOB_OFFSET		0x00008000

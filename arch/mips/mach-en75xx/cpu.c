@@ -3,6 +3,7 @@
 #include <init.h>
 #include <asm/global_data.h>
 #include <asm/io.h>
+#include <linux/kernel.h>
 #include <linux/sizes.h>
 #include <mach/en75xx.h>
 
@@ -29,6 +30,9 @@ int dram_init(void)
 		gd->ram_size = get_ram_size((long *)0xa0000000, SZ_256M);
 	else
 		gd->ram_size = (phys_size_t)size_mb << 20;
+
+	/* gd->ram_size 只算低端窗口里的 RAM：LMB 按它划可加载区，bootm 按它改写内核 DT 的 /memory */
+	gd->ram_size = min_t(phys_size_t, gd->ram_size, EN75XX_RAM_WINDOW_SIZE);
 
 	return 0;
 }
@@ -69,14 +73,13 @@ ulong notrace get_tbclk(void)
 phys_addr_t board_get_usable_ram_top(phys_size_t total_size)
 {
 	/*
-	 * DRAM is aliased into KSEG0 at 0x80000000, but KSEG0 ends at
-	 * 0x9fffffff and the SoC MMIO / FE-SRAM island sits at phys 0x1fa00000
-	 * (= KSEG0 0x9fa00000). On a 512 MiB part, ram_base + size = 0xa0000000
-	 * would relocate U-Boot past KSEG0 / into the island and hang. Relocating
-	 * into high DRAM (0x9exxxxxx) also hangs on this SoC (cache-flush over the
-	 * large range / unstable high DRAM). U-Boot gains nothing from a high top,
-	 * so clamp to the proven-good 0x90000000 (256 MiB); Linux still gets the
-	 * full DRAM via the /memory DT node.
+	 * DRAM is aliased into KSEG0 at 0x80000000; gd->ram_size is already
+	 * clamped to the 448 MiB low window (dram_init), so the top would be
+	 * 0x9c000000. Relocating into high DRAM (0x9exxxxxx) hung on this SoC
+	 * (cache-flush over the large range / unstable high DRAM), and U-Boot
+	 * gains nothing from a high top, so clamp to the proven-good 0x90000000
+	 * (256 MiB); Linux still gets all of gd->ram_size through the /memory
+	 * node bootm writes.
 	 */
 	phys_addr_t top = 0x80000000UL + gd->ram_size;
 
