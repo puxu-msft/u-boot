@@ -15,6 +15,7 @@ obj-$(CONFIG_X86) += cpuid.o msr.o
 obj-$(CONFIG_CMD_ADDRMAP) += addrmap.o
 obj-$(CONFIG_CMD_AMLDTB) += amldtb.o
 obj-$(CONFIG_CMD_AML_STORE) += aml_store.o
+obj-$(CONFIG_OPTIMUS) += optimus.o
 ifdef CONFIG_CONSOLE_RECORD
 obj-$(CONFIG_CMD_ACPI) += acpi.o
 endif

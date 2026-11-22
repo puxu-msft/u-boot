@@ -1,0 +1,6 @@
+config OPTIMUS
+	bool "Amlogic USB burning (Optimus) protocol core"
+	depends on CMDLINE && BLK && PARTITIONS
+	select CMD_AML_STORE
+	help
+	  Amlogic USB 线刷（WorldCup/Optimus）协议的设备侧核心，与传输无关：identify、TPL 命令与状态、bulk 命令、媒体读写（download/upload mem、download store）与命令词分发（其余命令词经 run_command 执行，过红线门）。USB 收发由 USB_FUNCTION_OPTIMUS 提供；核心本身可在 sandbox 里由测试直接喂控制请求与 bulk 数据。
