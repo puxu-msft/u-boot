@@ -22,7 +22,9 @@
 #define EN75XX_INTC_BASE		0xbfb40000
 #define EN75XX_UART0_BASE		0xbfbf0000
 #define EN75XX_TIMER_BASE		0xbfbf0100
-#define EN75XX_WDT_CTRL			0xbfbf0100	/* airoha WDT; writel(0) stops it */
+#define EN75XX_WDT_CTRL			0xbfbf0100	/* 定时器块的 CTRL：各定时器使能与看门狗复位使能 */
+#define EN75XX_WDT_TIMER_ENABLE		(1U << 5)	/* timer 5（看门狗）使能 */
+#define EN75XX_WDT_RESET_ENABLE		(1U << 25)	/* 看门狗到期复位使能 */
 #define EN75XX_GPIO_BASE		0xbfbf0200
 
 /* --- SYSCTL scratch/handoff registers (identical) --- */

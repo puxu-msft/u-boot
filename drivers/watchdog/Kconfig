@@ -196,6 +196,14 @@ config WDT_DAVINCI
 	  Select this to enable the watchdog timer for DaVinci SoCs such as the
 	  OMAP-L138.
 
+config WDT_EN7528
+	bool "EcoNet EN7528 watchdog timer support"
+	depends on WDT && ARCH_EN75XX
+	help
+	  Hardware watchdog of the EcoNet EN7528: timer 5 of the SoC timer
+	  block. The timer is left running on the way into Linux, whose
+	  en7528_wdt driver takes it over.
+
 config WDT_GPIO
 	bool "External gpio watchdog support"
 	depends on WDT

@@ -45,6 +45,13 @@
 		clocks = <&usb_clk>;	/* nop_phy_probe() calls clk_get_bulk() */
 	};
 
+	/* 定时器块的计数时钟（GS2107 实测 112.5 MHz：Linux en7528_wdt 开 timer 5 不开复位，110.07 ms 计 12,382,778） */
+	timer_clk: timer-clk {
+		compatible = "fixed-clock";
+		#clock-cells = <0>;
+		clock-frequency = <112500000>;
+	};
+
 	soc {
 		compatible = "simple-bus";
 		#address-cells = <1>;
@@ -145,6 +152,18 @@
 			 */
 			mediatek,u3p-dis-msk = <0x3>;
 			status = "disabled";
+		};
+
+		/*
+		 * 定时器块（0x1fbf0100）的 timer 5 作看门狗，寄存器模型同 Linux 的 en7528_wdt。SoC 内部的块、不依赖板上接线，
+		 * 默认启用；编了 WDT_EN7528 的构建由 WATCHDOG_AUTOSTART 从 board_r 起开着它、跳内核不停。超时取硬件上限：
+		 * 32 位重装值在 112.5 MHz 下约 38.2 s，从 bootm 最后一次喂狗到内核接手有足够余量。
+		 */
+		watchdog: watchdog@1fbf0100 {
+			compatible = "econet,en7528-wdt";
+			reg = <0x1fbf0100 0x3c>;
+			clocks = <&timer_clk>;
+			timeout-sec = <38>;
 		};
 
 		uart0: serial@1fbf0000 {
