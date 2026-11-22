@@ -546,6 +546,19 @@ config CMD_AMLDTB
 	help
 	  从 Amlogic 厂商 DTB 镜像里按名字（默认取 env aml_dt，与厂商 u-boot 相同）选出一份 FDT 复制到指定地址，并把 filesize 设为它的大小；-m 给出目的区容量时，FDT 超出即报错、不写。输入可以是 Android boot image（取 second 区）、eMMC reserved 分区的 256 KiB DTB 槽（校验尾部校验和）、gzip（校验 CRC32 与长度）、AML_ 多 DTB 容器或单个 FDT，逐层剥开；任何一层校验不过都拒绝。
 
+config CMD_AML_STORE
+	bool "store - Amlogic burning-tool storage commands (read-only)"
+	depends on BLK && PARTITIONS
+	help
+	  Amlogic USB 线刷主机（厂商烧录工具、usbdl-mux）发给 u-boot 的 store 命令词的只读子集：store init、store read <分区名> <地址> <偏移> <长度>（按厂商分区表的分区名定位，eMMC 上即 MPT）、store rom_read <地址> <偏移> <长度>（user 区物理偏移 = 偏移 + 0x200）。数字写法照厂商：地址 16 进制，偏移与长度 16 进制、可带 k/m/g 后缀。读越过分区或设备末尾即报错。
+
+config CMD_AML_STORE_DEV
+	string "Device used by the store commands"
+	depends on CMD_AML_STORE
+	default "mmc 0"
+	help
+	  store 命令词操作的块设备，写成 "<接口> <设备号>"；运行期可用环境变量 store_dev 覆盖。MMC 按 blk_get_device_by_str() 解析，不带 .<硬件分区> 时落在 user 区。
+
 config CMD_CEDIT
 	bool "cedit - Configuration editor"
 	depends on CEDIT

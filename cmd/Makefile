@@ -63,6 +63,7 @@ endif
 obj-$(CONFIG_CMD_ADTIMG) += adtimg.o
 obj-$(CONFIG_CMD_ABOOTIMG) += abootimg.o
 obj-$(CONFIG_CMD_AMLDTB) += amldtb.o
+obj-$(CONFIG_CMD_AML_STORE) += aml_store.o
 obj-$(CONFIG_CMD_CYCLIC) += cyclic.o
 obj-$(CONFIG_CMD_EVENT) += event.o
 obj-$(CONFIG_CMD_EXTENSION) += extension_board.o
