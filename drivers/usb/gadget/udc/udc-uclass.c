@@ -8,6 +8,7 @@
 
 #include <dm.h>
 #include <dm/device-internal.h>
+#include <g_dnl.h>
 #include <linux/printk.h>
 #include <linux/usb/gadget.h>
 
@@ -35,6 +36,14 @@ int udc_device_get_by_index(int index, struct udevice **udev)
 {
 	struct udevice *dev = NULL;
 	int ret;
+
+	/*
+	 * 已有 g_dnl 函数在用 UDC（例如在 Optimus 线刷态或 fastboot 里执行的命令又要起 ums、fastboot）：嵌套的命令出错退出时会 udc_device_put() 把正在用的控制器移除，所以在取控制器时就拒绝
+	 */
+	if (CONFIG_IS_ENABLED(USB_GADGET_DOWNLOAD) && g_dnl_busy()) {
+		pr_err("USB device controller is in use by another gadget\n");
+		return -EBUSY;
+	}
 
 	ret = uclass_get_device_by_seq(UCLASS_USB_GADGET_GENERIC, index, &dev);
 	if (!ret && dev) {

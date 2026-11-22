@@ -41,6 +41,8 @@ void g_dnl_set_serialnumber(char *);
 void g_dnl_set_product(const char *s);
 
 bool g_dnl_detach(void);
+/* g_dnl_busy() - 已有 g_dnl 函数注册在 UDC 上；此时再取 UDC（udc_device_get_by_index）会被拒绝 */
+bool g_dnl_busy(void);
 void g_dnl_trigger_detach(void);
 void g_dnl_clear_detach(void);
 int run_usb_dnl_gadget(int usbctrl_index, char *usb_dnl_gadget);

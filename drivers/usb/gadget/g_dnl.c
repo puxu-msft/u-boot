@@ -286,11 +286,24 @@ static struct usb_composite_driver g_dnl_driver = {
  * Registering via USB function name won't be necessary after rewriting
  * g_dnl to support multiple USB functions.
  */
+/* 有 g_dnl 函数注册在 UDC 上（ums、fastboot、ACM、Optimus 等正在用它） */
+static bool g_dnl_registered;
+
+bool g_dnl_busy(void)
+{
+	return g_dnl_registered;
+}
+
 int g_dnl_register(const char *name)
 {
 	int ret;
 
 	debug("%s: g_dnl_driver.name = %s\n", __func__, name);
+	if (g_dnl_registered) {
+		printf("%s: %s: USB gadget %s is active\n", __func__, name,
+		       g_dnl_driver.name);
+		return -EBUSY;
+	}
 	g_dnl_driver.name = name;
 
 	ret = usb_composite_register(&g_dnl_driver);
@@ -298,10 +311,12 @@ int g_dnl_register(const char *name)
 		printf("%s: failed!, error: %d\n", __func__, ret);
 		return ret;
 	}
+	g_dnl_registered = true;
 	return 0;
 }
 
 void g_dnl_unregister(void)
 {
 	usb_composite_unregister(&g_dnl_driver);
+	g_dnl_registered = false;
 }

@@ -28,6 +28,7 @@
 #define OPTI_BCD		0x0007
 #define OPTI_BUF		(OPTIMUS_FRAME_MAX + 1024)
 #define LEAVE_GRACE_MS		2000
+#define OPTI_PRODUCT		"U-Boot rescue (Optimus)"
 
 struct f_optimus {
 	struct usb_function func;
@@ -346,6 +347,8 @@ int f_optimus_run(int controller, ulong probe_ms)
 	if (ret)
 		goto out_core;
 	g_dnl_clear_detach();
+	/* 厂商线刷态没有字符串描述符；主线带一个固定的 iProduct，主机不发命令就能认出主线救援实例 */
+	g_dnl_set_product(OPTI_PRODUCT);
 	ret = g_dnl_register("usb_dnl_optimus");
 	if (ret)
 		goto out_put;
@@ -373,6 +376,7 @@ int f_optimus_run(int controller, ulong probe_ms)
 	g_dnl_unregister();
 	g_dnl_clear_detach();
 out_put:
+	g_dnl_set_product(NULL);
 	udc_device_put(udc);
 out_core:
 	optimus_release(&f->core);
