@@ -35,7 +35,9 @@ static int ehci_enable_vbus_supply(struct udevice *dev)
 
 	ret = device_get_supply_regulator(dev, "vbus-supply",
 					  &priv->vbus_supply);
-	if (ret && ret != -ENOENT)
+	/* 没编入稳压器支持（DM_REGULATOR 关）时桩函数返回 -ENOSYS：与没有 vbus-supply 一样，VBUS 不归本驱动管；编入时 -ENOSYS 是稳压器自己的错误，照常返回 */
+	if (ret && ret != -ENOENT &&
+	    (CONFIG_IS_ENABLED(DM_REGULATOR) || ret != -ENOSYS))
 		return ret;
 
 	ret = regulator_set_enable_if_allowed(priv->vbus_supply, true);
