@@ -8,6 +8,7 @@
  * Author: Ray Liu <ray.liu@airoha.com>
  */
 
+#include <asm/io.h>
 #include <asm/unaligned.h>
 #if IS_ENABLED(CONFIG_ARCH_AIROHA)
 #include <asm/arch/scu-regmap.h>
@@ -230,6 +231,10 @@
 #define SNAND_FIFO_TX_BUSWIDTH_SINGLE		0x08
 #define SNAND_FIFO_TX_BUSWIDTH_DUAL		0x09
 #define SNAND_FIFO_TX_BUSWIDTH_QUAD		0x0a
+/* EN7528 手动模式的总线换向（TX 后转入 RX）与读 ID 收尾操作码，随 Linux 侧 029-16 移植 */
+#define SNAND_FIFO_TX_CMD_TA			0x10
+#define SNAND_FIFO_TX_ADDR_TA			0x11
+#define SNAND_FIFO_OP_TERMINATOR		0x02
 #define SNAND_FIFO_RX_BUSWIDTH_SINGLE		0x0c
 #define SNAND_FIFO_RX_BUSWIDTH_DUAL		0x0e
 #define SNAND_FIFO_RX_BUSWIDTH_QUAD		0x0f
@@ -1176,12 +1181,45 @@ error_dma_mode_off:
 	return err;
 }
 
+static int airoha_snand_write_data_ta(struct airoha_snand_priv *priv,
+				      const u8 *data, int len)
+{
+	int i, err;
+
+	for (i = 0; i < len; i++) {
+		u8 op_cmd = (i == len - 1) ? SNAND_FIFO_TX_ADDR_TA : SNAND_FIFO_TX_BUSWIDTH_SINGLE;
+
+		err = airoha_snand_set_fifo_op(priv, op_cmd, 1);
+		if (err)
+			return err;
+		err = airoha_snand_write_data_to_fifo(priv, &data[i], 1);
+		if (err < 0)
+			return err;
+	}
+	return 0;
+}
+
+static void airoha_snand_drain_dfifo(struct airoha_snand_priv *priv)
+{
+	int i;
+	u32 val;
+
+	for (i = 0; i < 256; i++) {
+		regmap_read(priv->regmap_ctrl, REG_SPI_CTRL_DFIFO_EMPTY, &val);
+		if (val & SPI_CTRL_DFIFO_EMPTY)
+			return;
+		regmap_read(priv->regmap_ctrl, REG_SPI_CTRL_DFIFO_RDATA, &val);
+		regmap_write(priv->regmap_ctrl, REG_SPI_CTRL_DFIFO_RD, SPI_CTRL_DFIFO_RD);
+	}
+}
+
 static int airoha_snand_exec_op(struct spi_slave *slave,
 				const struct spi_mem_op *op)
 {
 	struct udevice *bus = slave->dev->parent;
 	struct airoha_snand_priv *priv;
 	int op_len, addr_len, dummy_len;
+	bool rx_after, id_read;
 	u8 buf[20], *data;
 	int i, err;
 
@@ -1202,27 +1240,51 @@ static int airoha_snand_exec_op(struct spi_slave *slave,
 	for (i = 0; i < dummy_len; i++)
 		*data++ = 0xff;
 
+	/* 后面要收数据的操作，TX 的最后一个字节用换向操作码发；只有操作码、没有地址与 dummy 的读（读 ID）走专用序列 */
+	rx_after = op->data.nbytes > 0 && op->data.dir == SPI_MEM_DATA_IN;
+	id_read = rx_after && !addr_len && !dummy_len;
+
 	/* switch to manual mode */
 	err = airoha_snand_set_mode(priv, SPI_MODE_MANUAL);
 	if (err < 0)
 		return err;
 
+	airoha_snand_drain_dfifo(priv);
+
+	/* 片选拉低之后的任何失败都经 out_cs_high 释放片选 */
+	if (id_read) {
+		err = airoha_snand_set_cs(priv, SPI_CHIP_SEL_LOW);
+		if (err < 0)
+			goto out_cs_high;
+	}
+
 	err = airoha_snand_set_cs(priv, SPI_CHIP_SEL_LOW);
 	if (err < 0)
-		return err;
+		goto out_cs_high;
 
 	/* opcode */
 	data = buf;
-	err = airoha_snand_write_data(priv, data, op_len,
-				      op->cmd.buswidth);
+	if (id_read) {
+		err = airoha_snand_set_fifo_op(priv, SNAND_FIFO_TX_CMD_TA,
+					       op_len);
+		if (err)
+			goto out_cs_high;
+		err = airoha_snand_write_data_to_fifo(priv, data, op_len);
+	} else {
+		err = airoha_snand_write_data(priv, data, op_len,
+					      op->cmd.buswidth);
+	}
 	if (err)
 		goto out_cs_high;
 
 	/* addr part */
 	data += op_len;
 	if (addr_len) {
-		err = airoha_snand_write_data(priv, data, addr_len,
-					      op->addr.buswidth);
+		if (rx_after && !dummy_len && op->addr.buswidth == 1)
+			err = airoha_snand_write_data_ta(priv, data, addr_len);
+		else
+			err = airoha_snand_write_data(priv, data, addr_len,
+						      op->addr.buswidth);
 		if (err)
 			goto out_cs_high;
 	}
@@ -1230,8 +1292,11 @@ static int airoha_snand_exec_op(struct spi_slave *slave,
 	/* dummy */
 	data += addr_len;
 	if (dummy_len) {
-		err = airoha_snand_write_data(priv, data, dummy_len,
-					      op->dummy.buswidth);
+		if (rx_after && op->dummy.buswidth == 1)
+			err = airoha_snand_write_data_ta(priv, data, dummy_len);
+		else
+			err = airoha_snand_write_data(priv, data, dummy_len,
+						      op->dummy.buswidth);
 		if (err)
 			goto out_cs_high;
 	}
@@ -1256,6 +1321,11 @@ out_cs_high:
 	 */
 	if (airoha_snand_set_cs(priv, SPI_CHIP_SEL_HIGH) && !err)
 		err = -EIO;
+
+	/* 读 ID 的收尾操作只在整个序列成功时发 */
+	if (!err && id_read)
+		err = airoha_snand_set_fifo_op(priv, SNAND_FIFO_OP_TERMINATOR,
+					       5);
 
 	return err;
 }
@@ -1284,6 +1354,18 @@ static int airoha_snand_probe(struct udevice *dev)
 		dev_err(dev, "failed to init spi ctrl regmap\n");
 		return ret;
 	}
+
+#if IS_ENABLED(CONFIG_SOC_EN7528)
+	{
+		u32 clk = __raw_readl((void __iomem *)(0xbfa20000 + 0x11c));
+		u32 new_clk = (clk & 0xffff) | 0x0501;
+
+		dev_dbg(dev, "SFC clock: chip_scu[0x11c]=0x%08x -> 0x%08x, SI_CK_SEL=9, MACMUX=1\n", clk, new_clk);
+		__raw_writel(new_clk, (void __iomem *)(0xbfa20000 + 0x11c));
+		regmap_write(priv->regmap_ctrl, REG_SPI_CTRL_SI_CK_SEL, 9);
+		regmap_write(priv->regmap_ctrl, REG_SPI_CTRL_MACMUX_SEL, 1);
+	}
+#endif
 
 	ret = regmap_init_mem_index(dev_ofnode(dev), &priv->regmap_nfi, 1);
 	if (ret) {
