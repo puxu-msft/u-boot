@@ -3,5 +3,5 @@
 spinand-objs := core.o otp.o
 spinand-objs += $(if $(CONFIG_MTD_EN75_BMT),en75_bmt.o)
 spinand-objs += alliancememory.o ato.o esmt.o fmsh.o foresee.o gigadevice.o macronix.o
-spinand-objs += micron.o paragon.o skyhigh.o toshiba.o winbond.o xtx.o
+spinand-objs += bwet.o micron.o paragon.o skyhigh.o toshiba.o winbond.o xtx.o
 obj-$(CONFIG_MTD_SPI_NAND) += spinand.o

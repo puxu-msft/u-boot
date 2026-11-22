@@ -1224,6 +1224,8 @@ static const struct nand_ops spinand_ops = {
 	.isbad = spinand_isbad,
 };
 
+extern const struct spinand_manufacturer bwet_spinand_manufacturer;
+
 static const struct spinand_manufacturer *spinand_manufacturers[] = {
 	&alliancememory_spinand_manufacturer,
 	&ato_spinand_manufacturer,
@@ -1237,6 +1239,7 @@ static const struct spinand_manufacturer *spinand_manufacturers[] = {
 	&skyhigh_spinand_manufacturer,
 	&toshiba_spinand_manufacturer,
 	&winbond_spinand_manufacturer,
+	&bwet_spinand_manufacturer,
 	&xtx_spinand_manufacturer,
 };
 
