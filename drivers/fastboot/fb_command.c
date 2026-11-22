@@ -386,18 +386,19 @@ static int __maybe_unused redline_run(bool erase, const char *part, ulong addr,
  * Writes the previously downloaded image to the partition indicated by
  * cmd_parameter. Writes to response.
  *
- * 开了红线确认（CMD_REDLINE）时不写：redline_hold_fastboot() 列出清单、记为待确认动作，回 FAIL；主机随后单独发 oem run:redline yes 才执行一次。每个 flash 请求是一次新输入。
+ * 开了红线确认（CMD_REDLINE）时先经 redline_hold_fastboot()：目标是 REDLINE_FASTBOOT_RELAXED 里的分区就照常写，否则不写、列出清单、记为待确认动作，回 FAIL，主机随后单独发 oem run:redline yes 才执行一次。每个 flash 请求是一次新输入。
  */
 static void __maybe_unused flash(char *cmd_parameter, char *response)
 {
 	if (IS_ENABLED(CONFIG_CMD_REDLINE)) {
 		redline_input_next();
-		redline_hold_fastboot(false, cmd_parameter,
-				      map_to_sysmem(fastboot_buf_addr),
-				      image_size, redline_run);
-		fastboot_fail("REDLINE held; confirm: oem run:redline yes",
-			      response);
-		return;
+		if (redline_hold_fastboot(false, cmd_parameter,
+					  map_to_sysmem(fastboot_buf_addr),
+					  image_size, redline_run)) {
+			fastboot_fail("REDLINE held; confirm: oem run:redline yes",
+				      response);
+			return;
+		}
 	}
 	flash_write(cmd_parameter, fastboot_buf_addr, image_size, response);
 }
@@ -417,10 +418,12 @@ static void __maybe_unused erase(char *cmd_parameter, char *response)
 {
 	if (IS_ENABLED(CONFIG_CMD_REDLINE)) {
 		redline_input_next();
-		redline_hold_fastboot(true, cmd_parameter, 0, 0, redline_run);
-		fastboot_fail("REDLINE held; confirm: oem run:redline yes",
-			      response);
-		return;
+		if (redline_hold_fastboot(true, cmd_parameter, 0, 0,
+					  redline_run)) {
+			fastboot_fail("REDLINE held; confirm: oem run:redline yes",
+				      response);
+			return;
+		}
 	}
 	erase_part(cmd_parameter, response);
 }

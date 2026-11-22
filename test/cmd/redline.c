@@ -1413,3 +1413,51 @@ static int cmd_test_redline_ums_ro(struct unit_test_state *uts)
 	return 0;
 }
 CMD_TEST(cmd_test_redline_ums_ro, UTF_CONSOLE);
+
+#ifdef CONFIG_REDLINE_FASTBOOT_RELAXED
+/* fastboot 的放宽分区（补丁 0405，sandbox 配置 REDLINE_FASTBOOT_RELAXED="mmcsda2"）：分区表里的同名分区、清单无附注时照常写；同名的原始区段、超出分区的镜像、表里没有的分区照旧拦下 */
+static int cmd_test_redline_fastboot_relaxed(struct unit_test_state *uts)
+{
+	char resp[FASTBOOT_RESPONSE_LEN];
+	struct rl_env e;
+	u8 *buf;
+
+	if (!IS_ENABLED(CONFIG_CMD_REDLINE) || !CONFIG_IS_ENABLED(FASTBOOT_FLASH_MMC) ||
+	    strcmp(CONFIG_REDLINE_FASTBOOT_RELAXED, "mmcsda2"))
+		return -EAGAIN;
+	ut_assertok(rl_setup(uts, &e));
+	buf = memalign(ARCH_DMA_MINALIGN, SZ_256K);
+	ut_assertnonnull(buf);
+	fastboot_init(buf, SZ_256K);
+	ut_assertok(fb_download(uts, e.a, BLKSZ));
+	console_record_reset();
+	fastboot_handle_command((char[]){"flash:mmcsda2"}, resp);
+	ut_asserteq_str("OKAY", resp);
+	ut_assert_nextline("redline: fastboot flash mmcsda2: relaxed partition (REDLINE_FASTBOOT_RELAXED), not held");
+	ut_assertok(blk_is(uts, e.mmc0, 0x100, 0xa5));
+	/* 不在表里的分区、同名但只是原始区段的写照旧拦下 */
+	ut_assertok(fb_held(uts, "flash:mmcsda1"));
+	run_command("redline cancel", 0);
+	ut_assertok(env_set("fastboot_raw_partition_rlfb", "0x100 0x100"));
+	ut_assertok(fb_held(uts, "flash:rlfb"));
+	run_command("redline cancel", 0);
+	env_set("fastboot_raw_partition_rlfb", NULL);
+	/* 超出分区：清单带附注，照旧拦下 */
+	ut_assertok(fb_download(uts, buf, 0x200 * 0x101));
+	ut_assertok(fb_held(uts, "flash:mmcsda2"));
+	run_command("redline cancel", 0);
+	/* 名单里的名字若只是原始区段（盘上没有同名分区）：照旧拦下 */
+	ut_assertok(fb_download(uts, e.a, BLKSZ));
+	memset(buf, 0, BLKSZ);
+	ut_asserteq(1, blk_dwrite(e.mmc0, 0, 1, buf));
+	part_init(e.mmc0);
+	ut_assertok(env_set("fastboot_raw_partition_mmcsda2", "0x100 0x100"));
+	ut_assertok(fb_held(uts, "flash:mmcsda2"));
+	env_set("fastboot_raw_partition_mmcsda2", NULL);
+	free(buf);
+	rl_teardown(&e);
+
+	return 0;
+}
+CMD_TEST(cmd_test_redline_fastboot_relaxed, UTF_CONSOLE);
+#endif

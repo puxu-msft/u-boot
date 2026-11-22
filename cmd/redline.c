@@ -1259,16 +1259,47 @@ static void rl_fastboot_hold(bool erase, const char *part, ulong addr,
 	puts("Next: 'redline yes' as a separate input (fastboot oem run:redline yes) runs it once, 'redline show' lists it again, 'redline cancel' drops it\n");
 }
 
-int redline_hold_fastboot(bool erase, const char *part, ulong addr, u32 size,
-			  int (*run)(bool erase, const char *part, ulong addr,
-				     u32 size))
+/*
+ * 设备声明写坏后不需要物理救援的分区（CONFIG_REDLINE_FASTBOOT_RELAXED，M12 由 check-image.py 核对它等于 usbdl-mux 设备策略里无拆挡与可控挡（策略文件里的 volatile 与 software）的 write_part 分区）：
+ * 名字在表里、fastboot 解析到的正是分区表里的同名分区（不是别名、不是原始区段）、清单没有附注（不超出分区、sparse 完整可解析）才放行
+ */
+static bool rl_fastboot_relaxed(const char *part, const struct rl_text *t)
+{
+	const char *list = CONFIG_REDLINE_FASTBOOT_RELAXED, *p;
+	char resp[FASTBOOT_RESPONSE_LEN];
+	struct disk_partition fb, pt;
+	struct blk_desc *desc;
+	size_t n = strlen(part);
+
+	if (!CONFIG_IS_ENABLED(FASTBOOT_FLASH_MMC) || !n || t->oom ||
+	    strstr(t->buf, "  note    :"))
+		return false;
+	for (p = list; (p = strstr(p, part)); p += n)
+		if ((p == list || p[-1] == ' ') && (!p[n] || p[n] == ' '))
+			break;
+	if (!p || fastboot_mmc_get_part_info(part, &desc, &fb, resp) < 0 ||
+	    part_get_info_by_name(desc, part, &pt) < 0)
+		return false;
+
+	return fb.start == pt.start && fb.size == pt.size && !desc->hwpart;
+}
+
+bool redline_hold_fastboot(bool erase, const char *part, ulong addr, u32 size,
+			   int (*run)(bool erase, const char *part, ulong addr,
+				      u32 size))
 {
 	struct rl_text t = {};
 
 	rl_fastboot_plan(&t, erase, part, addr, size);
+	if (rl_fastboot_relaxed(part, &t)) {
+		free(t.buf);
+		printf("redline: fastboot %s %s: relaxed partition (REDLINE_FASTBOOT_RELAXED), not held\n",
+		       erase ? "erase" : "flash", part);
+		return false;
+	}
 	rl_fastboot_hold(erase, part, addr, size, run, &t);
 
-	return 0;
+	return true;
 }
 
 static int rl_yes_fastboot(void)
