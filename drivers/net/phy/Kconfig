@@ -169,6 +169,11 @@ config PHY_CORTINA_ACCESS
 	help
 	  Cortina Access Ethernet PHYs init process
 
+config PHY_DAP8211R
+	bool "DAPU Telecom DAP8211R(I) Gigabit Ethernet PHY"
+	help
+	  DAPU Telecom DAP8211R(I) 千兆以太网 PHY 驱动（PHY ID 0x0008011b，睿普康 RPC8211FP(I) 相同）：按 phy-mode 与 PHY 节点的 rx-internal-delay-ps、tx-internal-delay-ps 设 RGMII 时钟延时（同 Linux 的 dap8211r），按 dptel,rx-clk-drive-strength、dptel,rx-data-drive-strength 设 RGMII 接收焊盘的驱动强度。
+
 config PHY_DAVICOM
 	bool "Davicom Ethernet PHYs support"
 
