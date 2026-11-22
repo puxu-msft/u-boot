@@ -12,6 +12,7 @@
 #include <fb_mmc.h>
 #include <fb_nand.h>
 #include <fb_spi_flash.h>
+#include <mapmem.h>
 #include <part.h>
 #include <stdlib.h>
 #include <vsprintf.h>
@@ -328,6 +329,54 @@ void fastboot_data_complete(char *response)
 	fastboot_bytes_received = 0;
 }
 
+static void __maybe_unused flash_write(const char *part, void *buf, u32 size,
+					char *response)
+{
+	if (IS_ENABLED(CONFIG_FASTBOOT_FLASH_BLOCK))
+		fastboot_block_flash_write(part, buf, size, response);
+
+	if (IS_ENABLED(CONFIG_FASTBOOT_FLASH_MMC))
+		fastboot_mmc_flash_write(part, buf, size, response);
+
+	if (IS_ENABLED(CONFIG_FASTBOOT_FLASH_NAND))
+		fastboot_nand_flash_write(part, buf, size, response);
+
+	if (IS_ENABLED(CONFIG_FASTBOOT_FLASH_SPI))
+		fastboot_spi_flash_write(part, buf, size, response);
+}
+
+static void __maybe_unused erase_part(const char *part, char *response)
+{
+	if (IS_ENABLED(CONFIG_FASTBOOT_FLASH_BLOCK))
+		fastboot_block_erase(part, response);
+
+	if (IS_ENABLED(CONFIG_FASTBOOT_FLASH_MMC))
+		fastboot_mmc_erase(part, response);
+
+	if (IS_ENABLED(CONFIG_FASTBOOT_FLASH_NAND))
+		fastboot_nand_erase(part, response);
+
+	if (IS_ENABLED(CONFIG_FASTBOOT_FLASH_SPI))
+		fastboot_spi_flash_erase(part, response);
+}
+
+/* 红线确认之后（redline yes）执行被拦的 flash/erase：结果打印到控制台，oem run:redline yes 按返回值回 OKAY 或 FAIL */
+static int __maybe_unused redline_run(bool erase, const char *part, ulong addr,
+				      u32 size)
+{
+	char response[FASTBOOT_RESPONSE_LEN] = "";
+	void *buf = map_sysmem(addr, size);
+
+	if (erase)
+		erase_part(part, response);
+	else
+		flash_write(part, buf, size, response);
+	unmap_sysmem(buf);
+	printf("fastboot %s %s: %s\n", erase ? "erase" : "flash", part, response);
+
+	return strncmp(response, "OKAY", 4) ? -EIO : 0;
+}
+
 /**
  * flash() - write the downloaded image to the indicated partition.
  *
@@ -336,24 +385,21 @@ void fastboot_data_complete(char *response)
  *
  * Writes the previously downloaded image to the partition indicated by
  * cmd_parameter. Writes to response.
+ *
+ * 开了红线确认（CMD_REDLINE）时不写：redline_hold_fastboot() 列出清单、记为待确认动作，回 FAIL；主机随后单独发 oem run:redline yes 才执行一次。每个 flash 请求是一次新输入。
  */
 static void __maybe_unused flash(char *cmd_parameter, char *response)
 {
-	if (IS_ENABLED(CONFIG_FASTBOOT_FLASH_BLOCK))
-		fastboot_block_flash_write(cmd_parameter, fastboot_buf_addr,
-					   image_size, response);
-
-	if (IS_ENABLED(CONFIG_FASTBOOT_FLASH_MMC))
-		fastboot_mmc_flash_write(cmd_parameter, fastboot_buf_addr,
-					 image_size, response);
-
-	if (IS_ENABLED(CONFIG_FASTBOOT_FLASH_NAND))
-		fastboot_nand_flash_write(cmd_parameter, fastboot_buf_addr,
-					  image_size, response);
-
-	if (IS_ENABLED(CONFIG_FASTBOOT_FLASH_SPI))
-		fastboot_spi_flash_write(cmd_parameter, fastboot_buf_addr,
-					 image_size, response);
+	if (IS_ENABLED(CONFIG_CMD_REDLINE)) {
+		redline_input_next();
+		redline_hold_fastboot(false, cmd_parameter,
+				      map_to_sysmem(fastboot_buf_addr),
+				      image_size, redline_run);
+		fastboot_fail("REDLINE held; confirm: oem run:redline yes",
+			      response);
+		return;
+	}
+	flash_write(cmd_parameter, fastboot_buf_addr, image_size, response);
 }
 
 /**
@@ -364,20 +410,19 @@ static void __maybe_unused flash(char *cmd_parameter, char *response)
  *
  * Erases the partition indicated by cmd_parameter (clear to 0x00s). Writes
  * to response.
+ *
+ * 开了红线确认时与 flash() 一样先拦下。
  */
 static void __maybe_unused erase(char *cmd_parameter, char *response)
 {
-	if (IS_ENABLED(CONFIG_FASTBOOT_FLASH_BLOCK))
-		fastboot_block_erase(cmd_parameter, response);
-
-	if (IS_ENABLED(CONFIG_FASTBOOT_FLASH_MMC))
-		fastboot_mmc_erase(cmd_parameter, response);
-
-	if (IS_ENABLED(CONFIG_FASTBOOT_FLASH_NAND))
-		fastboot_nand_erase(cmd_parameter, response);
-
-	if (IS_ENABLED(CONFIG_FASTBOOT_FLASH_SPI))
-		fastboot_spi_flash_erase(cmd_parameter, response);
+	if (IS_ENABLED(CONFIG_CMD_REDLINE)) {
+		redline_input_next();
+		redline_hold_fastboot(true, cmd_parameter, 0, 0, redline_run);
+		fastboot_fail("REDLINE held; confirm: oem run:redline yes",
+			      response);
+		return;
+	}
+	erase_part(cmd_parameter, response);
 }
 
 /**

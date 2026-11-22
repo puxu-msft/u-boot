@@ -13,6 +13,9 @@
 #include <blk.h>
 #include <command.h>
 #include <div64.h>
+#include <fastboot.h>
+#include <fb_mmc.h>
+#include <image-sparse.h>
 #include <lmb.h>
 #include <malloc.h>
 #include <mapmem.h>
@@ -331,8 +334,8 @@ static void rl_mmc_erase(struct rl_text *t, struct blk_desc *desc, u32 blk,
  * 文件头之后先跳 file_hdr_sz，比 sparse_header_t 长时多出的部分再跳一次（上游如此）；每个 chunk 先读 chunk_header_t，chunk_hdr_sz 更长时多出的部分跳过；RAW 带 blk_sz × chunk_sz 字节数据，FILL 带 4 字节，CRC32 跳过 blk_sz × chunk_sz 字节，DONT_CARE 不带数据；RAW、FILL、DONT_CARE 让盘上位置前进 blk_sz × chunk_sz / 512 块。
  * 命令先查魔数与主版本（is_sparse_image()）、blk_sz 是 512 的倍数，不符时一块都不写；RAW、FILL、CRC32 的 total_sz 与应有长度不符、类型未知、RAW/FILL 越过盘尾（命令给的范围是起点到盘尾）时，在该 chunk 报错返回，前面的 chunk 已经写了；走完后各 chunk 的块数之和与头里的 total_blks 不符时，写完全部再报错。
  */
-static void rl_swrite(struct rl_text *t, struct blk_desc *desc, ulong addr,
-		      u32 start)
+static void rl_swrite_to(struct rl_text *t, struct blk_desc *desc, ulong addr,
+			 lbaint_t start, lbaint_t limit, const char *who)
 {
 	const sparse_header_t *sh;
 	const chunk_header_t *ch;
@@ -345,8 +348,9 @@ static void rl_swrite(struct rl_text *t, struct blk_desc *desc, ulong addr,
 	if (why) {
 		rl_printf(t, "  source  : sparse header at 0x%lx (%s: not read)\n",
 			  addr, why);
-		rl_puts(t, "  note    : the image cannot be parsed: what mmc swrite writes is unknown, the range is shown up to the end of the device\n");
-		rl_range(t, desc, start, desc->lba > start ? desc->lba - start : 0);
+		rl_printf(t, "  note    : the image cannot be parsed: what %s writes is unknown, the range is shown up to the end of the %s\n",
+			  who, limit == desc->lba ? "device" : "partition");
+		rl_range(t, desc, start, limit > start ? limit - start : 0);
 		return;
 	}
 	sh = map_sysmem(addr, sizeof(*sh));
@@ -357,12 +361,13 @@ static void rl_swrite(struct rl_text *t, struct blk_desc *desc, ulong addr,
 	chunks = le32_to_cpu(sh->total_chunks);
 	if (le32_to_cpu(sh->magic) != SPARSE_HEADER_MAGIC ||
 	    le16_to_cpu(sh->major_version) != 1)
-		bad = "  note    : no Android sparse image at the source (magic or major version): mmc swrite refuses before writing anything\n";
+		bad = "no Android sparse image at the source (magic or major version)";
 	else if (blk_sz % RL_SPARSE_BLKSZ)
-		bad = "  note    : the sparse block size is not a multiple of 512: mmc swrite refuses before writing anything\n";
+		bad = "the sparse block size is not a multiple of 512";
 	unmap_sysmem(sh);
 	if (bad) {
-		rl_puts(t, bad);
+		rl_printf(t, "  note    : %s: %s refuses before writing anything\n",
+			  bad, who);
 		rl_mmc_whole(t, desc->devnum);
 		return;
 	}
@@ -373,8 +378,9 @@ static void rl_swrite(struct rl_text *t, struct blk_desc *desc, ulong addr,
 		if (why) {
 			rl_printf(t, "  source  : chunk %u header at 0x%llx (%s: not read)\n",
 				  i + 1, addr + off, why);
-			rl_puts(t, "  note    : the image cannot be parsed: what mmc swrite writes is unknown, the range is shown up to the end of the device\n");
-			rl_range(t, desc, start, desc->lba > start ? desc->lba - start : 0);
+			rl_printf(t, "  note    : the image cannot be parsed: what %s writes is unknown, the range is shown up to the end of the %s\n",
+				  who, limit == desc->lba ? "device" : "partition");
+			rl_range(t, desc, start, limit > start ? limit - start : 0);
 			return;
 		}
 		ch = map_sysmem(addr + off, sizeof(*ch));
@@ -392,8 +398,9 @@ static void rl_swrite(struct rl_text *t, struct blk_desc *desc, ulong addr,
 			   type != CHUNK_TYPE_DONT_CARE && type != CHUNK_TYPE_CRC32) {
 			bad = "unknown chunk type";
 		} else if ((type == CHUNK_TYPE_RAW || type == CHUNK_TYPE_FILL) &&
-			   blk + data / RL_SPARSE_BLKSZ > desc->lba) {
-			bad = "it would run past the end of the device";
+			   blk + data / RL_SPARSE_BLKSZ > limit) {
+			bad = limit == desc->lba ? "it would run past the end of the device" :
+			      "it would run past the end of the partition";
 		}
 		if (bad)
 			break;
@@ -408,12 +415,18 @@ static void rl_swrite(struct rl_text *t, struct blk_desc *desc, ulong addr,
 	}
 	rl_source(t, addr, off);
 	if (bad)
-		rl_printf(t, "  note    : chunk %u (type 0x%x) is rejected (%s): mmc swrite writes the chunks before it, then fails\n",
-			  i + 1, type, bad);
+		rl_printf(t, "  note    : chunk %u (type 0x%x) is rejected (%s): %s writes the chunks before it, then fails\n",
+			  i + 1, type, bad, who);
 	else if (total != total_blks)
-		rl_printf(t, "  note    : the chunks add up to 0x%x sparse blocks, the header declares 0x%x: mmc swrite writes them all, then reports failure\n",
-			  total, total_blks);
+		rl_printf(t, "  note    : the chunks add up to 0x%x sparse blocks, the header declares 0x%x: %s writes them all, then reports failure\n",
+			  total, total_blks, who);
 	rl_range(t, desc, start, blk - start);
+}
+
+static void rl_swrite(struct rl_text *t, struct blk_desc *desc, ulong addr,
+		      u32 start)
+{
+	rl_swrite_to(t, desc, addr, start, desc->lba, "mmc swrite");
 }
 
 static bool rl_mmc(struct rl_text *t, const char *name, int argc,
@@ -1023,21 +1036,28 @@ void redline_input_next(void)
 	rl_input_gen++;
 }
 
-/* 唯一的待确认动作：argv 的指针数组与字符串同一块分配；text 是展示过的清单正文，gen 是被拦时的输入代次 */
+/*
+ * 唯一的待确认动作：text 是展示过的清单正文（有它就有待确认动作），gen 是被拦时的输入代次。
+ * 命令（argv 的指针数组与字符串同一块分配）或 fastboot flash/erase（fb_run 非空：分区名、源数据地址与长度、确认后执行它的函数）二者其一
+ */
 static struct {
 	int argc;
 	char **argv;
 	char *text;
 	uint gen;
+	int (*fb_run)(bool erase, const char *part, ulong addr, u32 size);
+	bool fb_erase;
+	char *fb_part;
+	ulong fb_addr;
+	u32 fb_size;
 } rl_pending;
 
 static void rl_drop(void)
 {
 	free(rl_pending.argv);
 	free(rl_pending.text);
-	rl_pending.argc = 0;
-	rl_pending.argv = NULL;
-	rl_pending.text = NULL;
+	free(rl_pending.fb_part);
+	memset(&rl_pending, '\0', sizeof(rl_pending));
 }
 
 static char **rl_dup_argv(int argc, char *const argv[])
@@ -1124,13 +1144,166 @@ int redline_gate(struct cmd_tbl *cmdtp, int argc, char *const argv[])
 	return CMD_RET_FAILURE;
 }
 
+/*
+ * fastboot flash/erase 的清单：目标按 fastboot 自己的解析（fastboot_mmc_get_part_info()：分区名、fastboot_partition_alias_<名> 别名、fastboot_raw_partition_<名> 原始区段），所以与 fastboot 实际写的对象一致；分区名随盘上的分区表（MPT）动态取。
+ * flash 的源数据是 sparse 镜像时照 write_sparse_image() 逐 chunk 走出展开后的盘上范围（RAW、FILL 写，DONT_CARE 只跳过，范围从分区起点量到最后一个 chunk 之后），否则是下载长度取整到块。boot0/boot1、整个 user 区、gpt、mbr、zimage 这类特殊目标按 fastboot 的写法列出整块硬件分区或分区表所在的块。
+ */
+static void rl_fastboot_plan(struct rl_text *t, bool erase, const char *part,
+			     ulong addr, u32 size)
+{
+	char resp[FASTBOOT_RESPONSE_LEN];
+	struct disk_partition info;
+	struct blk_desc *desc;
+	const char *special = NULL;
+	void *src;
+	bool sparse;
+
+	rl_printf(t, "  command : fastboot %s %s", erase ? "erase" : "flash", part);
+	if (!erase)
+		rl_printf(t, " (0x%x bytes downloaded)", size);
+	rl_puts(t, "\n");
+	if (!CONFIG_IS_ENABLED(FASTBOOT_FLASH_MMC)) {
+		rl_puts(t, "  note    : fastboot flashes no MMC here: the target is not resolved\n");
+		if (!erase)
+			rl_source(t, addr, size);
+		return;
+	}
+#ifdef CONFIG_FASTBOOT_MMC_BOOT_SUPPORT
+	if (!strcmp(part, CONFIG_FASTBOOT_MMC_BOOT1_NAME))
+		special = "the whole boot0 hardware partition";
+	else if (!strcmp(part, CONFIG_FASTBOOT_MMC_BOOT2_NAME))
+		special = "the whole boot1 hardware partition";
+#endif
+#if CONFIG_IS_ENABLED(FASTBOOT_MMC_USER_SUPPORT)
+	if (!strcmp(part, CONFIG_FASTBOOT_MMC_USER_NAME))
+		special = "the whole user area";
+#endif
+#if CONFIG_IS_ENABLED(EFI_PARTITION)
+	if (!erase && !strcmp(part, CONFIG_FASTBOOT_GPT_NAME))
+		special = "a protective MBR and the primary GPT from block 0 (blocks 0..0x22), and the backup GPT at the end of the device";
+#endif
+#if CONFIG_IS_ENABLED(DOS_PARTITION)
+	if (!erase && !strcmp(part, CONFIG_FASTBOOT_MBR_NAME))
+		special = "an MBR at block 0 (and EBRs of any extended partitions)";
+#endif
+	if (IS_ENABLED(CONFIG_ANDROID_BOOT_IMAGE) && !erase &&
+	    !strncasecmp(part, "zimage", 6))
+		special = "the kernel inside the boot image of partition 'boot' (rewrites the boot partition)";
+	if (special) {
+		rl_printf(t, "  target  : %s\n", special);
+		if (!erase)
+			rl_source(t, addr, size);
+		rl_mmc_whole(t, CONFIG_FASTBOOT_FLASH_MMC_DEV);
+		if (!strncmp(special, "a protective", 12) || !strncmp(special, "an MBR", 6)) {
+			if (!blk_get_desc(UCLASS_MMC, CONFIG_FASTBOOT_FLASH_MMC_DEV, &desc))
+				rl_overlaps(t, desc, 0, 0x22, 0x22);
+		}
+		return;
+	}
+	if (fastboot_mmc_get_part_info(part, &desc, &info, resp) < 0) {
+		rl_printf(t, "  target  : '%s' is not a partition, alias or raw partition fastboot knows: fastboot will fail\n",
+			  part);
+		if (!erase)
+			rl_source(t, addr, size);
+		return;
+	}
+	rl_printf(t, "  target  : '%s', blocks 0x" LBAF "..0x" LBAF " (0x" LBAF " blocks)\n",
+		  part, info.start, info.start + info.size, info.size);
+	if (erase) {
+		rl_range(t, desc, info.start, info.size);
+		return;
+	}
+	sparse = false;
+	if (!rl_unreadable(addr, sizeof(sparse_header_t))) {
+		src = map_sysmem(addr, sizeof(sparse_header_t));
+		sparse = is_sparse_image(src);
+		unmap_sysmem(src);
+	}
+	if (sparse) {
+		rl_puts(t, "  image   : Android sparse; the range below is the expanded one (RAW and FILL chunks are written, DONT_CARE is skipped)\n");
+		rl_swrite_to(t, desc, addr, info.start, info.start + info.size,
+			     "fastboot flash");
+		return;
+	}
+	rl_source(t, addr, size);
+	if (DIV_ROUND_UP(size, info.blksz) > info.size)
+		rl_puts(t, "  note    : the image is larger than the partition: fastboot refuses before writing anything\n");
+	rl_range(t, desc, info.start,
+		 min_t(lbaint_t, DIV_ROUND_UP(size, info.blksz), info.size));
+}
+
+static void rl_fastboot_hold(bool erase, const char *part, ulong addr,
+			     u32 size, int (*run)(bool, const char *, ulong, u32),
+			     struct rl_text *t)
+{
+	char *p = t->oom ? NULL : strdup(part);
+
+	rl_drop();
+	if (!p) {
+		free(t->buf);
+		puts("REDLINE: storage write held, not executed (out of memory: nothing is pending)\n");
+		return;
+	}
+	rl_pending.text = t->buf;
+	rl_pending.gen = rl_input_gen;
+	rl_pending.fb_run = run;
+	rl_pending.fb_erase = erase;
+	rl_pending.fb_part = p;
+	rl_pending.fb_addr = addr;
+	rl_pending.fb_size = size;
+	puts("REDLINE: storage write held, not executed\n");
+	puts(rl_pending.text);
+	puts("Next: 'redline yes' as a separate input (fastboot oem run:redline yes) runs it once, 'redline show' lists it again, 'redline cancel' drops it\n");
+}
+
+int redline_hold_fastboot(bool erase, const char *part, ulong addr, u32 size,
+			  int (*run)(bool erase, const char *part, ulong addr,
+				     u32 size))
+{
+	struct rl_text t = {};
+
+	rl_fastboot_plan(&t, erase, part, addr, size);
+	rl_fastboot_hold(erase, part, addr, size, run, &t);
+
+	return 0;
+}
+
+static int rl_yes_fastboot(void)
+{
+	struct rl_text t = {};
+	int (*run)(bool, const char *, ulong, u32) = rl_pending.fb_run;
+	bool erase = rl_pending.fb_erase;
+	ulong addr = rl_pending.fb_addr;
+	u32 size = rl_pending.fb_size;
+	char *part = rl_pending.fb_part;
+	int ret;
+
+	rl_fastboot_plan(&t, erase, part, addr, size);
+	if (t.oom || strcmp(t.buf, rl_pending.text)) {
+		puts("REDLINE: the target or the source data changed since the list was shown; not executed, new list follows\n");
+		rl_pending.fb_part = NULL;
+		rl_fastboot_hold(erase, part, addr, size, run, &t);
+		free(part);
+		return CMD_RET_FAILURE;
+	}
+	free(t.buf);
+	/* 单次有效：执行前就作废 */
+	rl_pending.fb_part = NULL;
+	rl_drop();
+	printf("redline: running fastboot %s %s\n", erase ? "erase" : "flash", part);
+	ret = run(erase, part, addr, size);
+	free(part);
+
+	return ret ? CMD_RET_FAILURE : CMD_RET_SUCCESS;
+}
+
 static int rl_yes(void)
 {
 	struct rl_text t = {};
 	int argc = rl_pending.argc, rep = 1, ret;
 	char **argv = rl_pending.argv;
 
-	if (!argv) {
+	if (!rl_pending.text) {
 		puts("redline: nothing pending\n");
 		return CMD_RET_FAILURE;
 	}
@@ -1139,6 +1312,8 @@ static int rl_yes(void)
 		puts("REDLINE: the held action was listed during this same input (command line, script, bootcmd or fastboot request); not executed, it stays pending for 'redline yes' as a separate input\n");
 		return CMD_RET_FAILURE;
 	}
+	if (rl_pending.fb_run)
+		return rl_yes_fastboot();
 	if (!rl_judge(find_cmd(argv[0]), argc, argv, &t)) {
 		puts("redline: the held action no longer needs confirmation; dropped\n");
 		rl_drop();
@@ -1171,15 +1346,17 @@ static int do_redline(struct cmd_tbl *cmdtp, int flag, int argc,
 	if (argc == 2 && !strcmp(argv[1], "yes"))
 		return rl_yes();
 	if (argc == 2 && !strcmp(argv[1], "cancel")) {
-		if (rl_pending.argv)
-			printf("redline: dropped %s\n", rl_pending.argv[0]);
+		if (rl_pending.text)
+			printf("redline: dropped %s\n", rl_pending.fb_run ?
+			       (rl_pending.fb_erase ? "fastboot erase" : "fastboot flash") :
+			       rl_pending.argv[0]);
 		else
 			puts("redline: nothing pending\n");
 		rl_drop();
 		return CMD_RET_SUCCESS;
 	}
 	if (argc == 1 || !strcmp(argv[1], "show")) {
-		if (!rl_pending.argv) {
+		if (!rl_pending.text) {
 			puts("redline: nothing pending\n");
 			return CMD_RET_FAILURE;
 		}

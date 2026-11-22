@@ -306,6 +306,22 @@ void redline_input_next(void);
  * Return: 缓冲的物理地址，取不到时为 0
  */
 ulong redline_sm_input_buffer(void);
+
+/**
+ * redline_hold_fastboot() - fastboot flash/erase 的红线确认（cmd/redline.c）
+ *
+ * drivers/fastboot/fb_command.c 在执行 flash/erase 之前调用：动作不执行，打印红线动作清单（下载缓冲的长度与 crc32，或 sparse 镜像逐 chunk 展开后的源数据与盘上范围；设备、硬件分区、起止块与重叠的分区），记为唯一的待确认动作；之后单独一次输入的 redline yes（fastboot oem run:redline yes）按当时的状态重生成清单，与展示过的一致才经 @run 执行一次。
+ *
+ * @erase:	true 为 erase，false 为 flash
+ * @part:	fastboot 的分区名（含别名与 boot0/gpt 一类的特殊目标）
+ * @addr:	flash 的源数据（fastboot 下载缓冲）的地址，erase 不用
+ * @size:	flash 的源数据长度
+ * @run:	确认后执行这一动作，返回 0 表示成功
+ * Return: 0（总是拦下；调用方给主机回 FAIL）
+ */
+int redline_hold_fastboot(bool erase, const char *part, ulong addr, u32 size,
+			  int (*run)(bool erase, const char *part, ulong addr,
+				     u32 size));
 #else
 static inline int redline_gate(struct cmd_tbl *cmdtp, int argc,
 			       char *const argv[])
@@ -315,6 +331,14 @@ static inline int redline_gate(struct cmd_tbl *cmdtp, int argc,
 
 static inline void redline_input_next(void)
 {
+}
+
+static inline int redline_hold_fastboot(bool erase, const char *part,
+					ulong addr, u32 size,
+					int (*run)(bool erase, const char *part,
+						   ulong addr, u32 size))
+{
+	return -ENOSYS;
 }
 #endif
 

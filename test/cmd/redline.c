@@ -11,10 +11,12 @@
 #include <blkmap.h>
 #include <command.h>
 #include <env.h>
+#include <fastboot.h>
 #include <image.h>
 #include <lmb.h>
 #include <malloc.h>
 #include <mapmem.h>
+#include <memalign.h>
 #include <mmc.h>
 #include <part.h>
 #include <sparse_format.h>
@@ -1249,3 +1251,138 @@ static int cmd_test_redline_off(struct unit_test_state *uts)
 	return 0;
 }
 CMD_TEST(cmd_test_redline_off, UTF_CONSOLE);
+
+/*
+ * fastboot flash/erase（补丁 0403）：每个请求被拦下、回 FAIL，清单按 fastboot 自己的解析给出目标（这里用 fastboot_raw_partition_ 原始区段，块 0x40 起 0x20 块）；同一请求里不能确认；单独一次输入的 redline yes 执行一次；展示后下载缓冲变了就重新展示；sparse 镜像按展开后的范围列（RAW 写、DONT_CARE 跳过）；erase 列整个分区；fastboot 不认识的名字照样拦、清单注明。sandbox 没开 FASTBOOT_OEM_RUN，“单独一次输入”用 redline_input_next() 加 redline yes 模拟（oem run 正是这样做的）
+ */
+#define FB_HINT	"Next: 'redline yes' as a separate input (fastboot oem run:redline yes) runs it once, 'redline show' lists it again, 'redline cancel' drops it"
+#define FB_FAIL	"FAILREDLINE held; confirm: oem run:redline yes"
+
+static int fb_download(struct unit_test_state *uts, const void *data, u32 len)
+{
+	char resp[FASTBOOT_RESPONSE_LEN], cmd[32];
+
+	snprintf(cmd, sizeof(cmd), "download:%08x", len);
+	fastboot_handle_command(cmd, resp);
+	ut_assert(!strncmp(resp, "DATA", 4));
+	fastboot_data_download(data, len, resp);
+	fastboot_data_complete(resp);
+	ut_asserteq_str("OKAY", resp);
+
+	return 0;
+}
+
+static int fb_held(struct unit_test_state *uts, const char *cmd)
+{
+	char resp[FASTBOOT_RESPONSE_LEN], c[64];
+
+	strlcpy(c, cmd, sizeof(c));
+	console_record_reset();
+	fastboot_handle_command(c, resp);
+	ut_asserteq_str(FB_FAIL, resp);
+	/* fastboot 解析不认识的名字时自己会先打印一行（Bad device specification） */
+	ut_assert_skip_to_line(HELD);
+
+	return 0;
+}
+
+static int cmd_test_redline_fastboot(struct unit_test_state *uts)
+{
+	struct rl_env e;
+	u8 *buf, *img, *c2;
+	ulong bufa;
+
+	if (!IS_ENABLED(CONFIG_CMD_REDLINE) || !CONFIG_IS_ENABLED(FASTBOOT_FLASH_MMC))
+		return -EAGAIN;
+	ut_assertok(rl_setup(uts, &e));
+	buf = memalign(ARCH_DMA_MINALIGN, SZ_64K);
+	ut_assertnonnull(buf);
+	bufa = map_to_sysmem(buf);
+	fastboot_init(buf, SZ_64K);
+	ut_assertok(env_set("fastboot_raw_partition_rlfb", "0x40 0x20"));
+
+	/* 一块 0xa5：拦下，块 0x40 不变 */
+	ut_assertok(fb_download(uts, e.a, BLKSZ));
+	ut_assertok(fb_held(uts, "flash:rlfb"));
+	ut_assert_nextline("  command : fastboot flash rlfb (0x200 bytes downloaded)");
+	ut_assert_nextline("  target  : 'rlfb', blocks 0x40..0x60 (0x20 blocks)");
+	ut_assert_nextline("  source  : 0x200 bytes at 0x%lx, crc32 0x%08x", bufa, CRC_A5);
+	ut_assert_nextline("  device  : mmc 0, hwpart 0 (user area), 512-byte blocks, 0x800 blocks");
+	ut_assert_nextline("  blocks  : 0x40..0x41 (0x1 blocks)");
+	ut_assert_nextline("  bytes   : 0x8000..0x8200");
+	ut_assert_nextline("  overlaps: 1 of the 2 partitions");
+	ut_assert_nextline("    #1 mmcsda1: blocks 0x20..0x60");
+	ut_assert_nextline(FB_HINT);
+	ut_assert_console_end();
+	ut_assertok(blk_is(uts, e.mmc0, 0x40, 0x11));
+
+	/* 同一次输入里确认被拒；单独一次输入执行一次，再来一次没有可执行的 */
+	ut_asserteq(1, run_command("redline yes", 0));
+	ut_assertok(blk_is(uts, e.mmc0, 0x40, 0x11));
+	redline_input_next();
+	ut_assertok(run_command("redline yes", 0));
+	ut_assertok(blk_is(uts, e.mmc0, 0x40, 0xa5));
+	ut_assertok(blk_is(uts, e.mmc0, 0x41, 0x11));
+	redline_input_next();
+	ut_asserteq(1, run_command("redline yes", 0));
+
+	/* 展示之后下载缓冲变了（主机又下载了别的）：不执行，展示新清单 */
+	ut_assertok(fb_download(uts, e.b, BLKSZ));
+	ut_assertok(fb_held(uts, "flash:rlfb"));
+	memset(buf, 0x33, BLKSZ);
+	redline_input_next();
+	console_record_reset();
+	ut_asserteq(1, run_command("redline yes", 0));
+	ut_assert_nextline(CHANGED);
+	ut_assert_nextline(HELD);
+	ut_assert_nextline("  command : fastboot flash rlfb (0x200 bytes downloaded)");
+	ut_assert_nextline("  target  : 'rlfb', blocks 0x40..0x60 (0x20 blocks)");
+	ut_assert_nextline("  source  : 0x200 bytes at 0x%lx, crc32 0x%08x", bufa, CRC_33);
+	ut_assertok(blk_is(uts, e.mmc0, 0x40, 0xa5));
+	ut_assertok(run_command("redline cancel", 0));
+
+	/* sparse：RAW 一块 4 KiB、DONT_CARE 一块 4 KiB，范围按展开后的 0x10 块列 */
+	img = calloc(1, 0x1034);
+	ut_assertnonnull(img);
+	sparse_hdr(img, 28, 2, 2);
+	c2 = sparse_chunk(img + 28, CHUNK_TYPE_RAW, 12 + 4096);
+	sparse_chunk(c2, CHUNK_TYPE_DONT_CARE, 12);
+	ut_assertok(fb_download(uts, img, 0x1034));
+	ut_assertok(fb_held(uts, "flash:rlfb"));
+	ut_assert_nextline("  command : fastboot flash rlfb (0x1034 bytes downloaded)");
+	ut_assert_nextline("  target  : 'rlfb', blocks 0x40..0x60 (0x20 blocks)");
+	ut_assert_nextline("  image   : Android sparse; the range below is the expanded one (RAW and FILL chunks are written, DONT_CARE is skipped)");
+	ut_assert_nextline("  source  : 0x1034 bytes at 0x%lx, crc32 0xa0ca6025", bufa);
+	ut_assert_nextline("  device  : mmc 0, hwpart 0 (user area), 512-byte blocks, 0x800 blocks");
+	ut_assert_nextline("  blocks  : 0x40..0x50 (0x10 blocks)");
+	/* 分区只有 4 块：第 1 个 RAW chunk（8 块）就越过分区末尾，上游在它之前停下 */
+	ut_assertok(env_set("fastboot_raw_partition_rlfb", "0x40 0x4"));
+	ut_assertok(fb_held(uts, "flash:rlfb"));
+	ut_assert_nextline("  command : fastboot flash rlfb (0x1034 bytes downloaded)");
+	ut_assert_nextline("  target  : 'rlfb', blocks 0x40..0x44 (0x4 blocks)");
+	ut_assert_nextline("  image   : Android sparse; the range below is the expanded one (RAW and FILL chunks are written, DONT_CARE is skipped)");
+	ut_assert_skip_to_line("  note    : chunk 1 (type 0xcac1) is rejected (it would run past the end of the partition): fastboot flash writes the chunks before it, then fails");
+	ut_assertok(env_set("fastboot_raw_partition_rlfb", "0x40 0x20"));
+	free(img);
+	ut_assertok(run_command("redline cancel", 0));
+
+	/* erase：整个分区；不认识的名字照样拦下、清单注明 */
+	ut_assertok(fb_held(uts, "erase:rlfb"));
+	ut_assert_nextline("  command : fastboot erase rlfb");
+	ut_assert_nextline("  target  : 'rlfb', blocks 0x40..0x60 (0x20 blocks)");
+	ut_assert_nextline("  device  : mmc 0, hwpart 0 (user area), 512-byte blocks, 0x800 blocks");
+	ut_assert_nextline("  blocks  : 0x40..0x60 (0x20 blocks)");
+	ut_assertok(fb_held(uts, "flash:nosuch"));
+	ut_assert_nextline("  command : fastboot flash nosuch (0x1034 bytes downloaded)");
+	ut_assert_nextline("  target  : 'nosuch' is not a partition, alias or raw partition fastboot knows: fastboot will fail");
+	console_record_reset();
+	ut_assertok(run_command("redline cancel", 0));
+	ut_assert_nextline("redline: dropped fastboot flash");
+
+	env_set("fastboot_raw_partition_rlfb", NULL);
+	free(buf);
+	rl_teardown(&e);
+
+	return 0;
+}
+CMD_TEST(cmd_test_redline_fastboot, UTF_CONSOLE);
