@@ -10,9 +10,6 @@ ethaddr=b4:ba:12:5c:41:a0
 bootdelay=1
 bootretry=5
 bootlimit=3
-bootcount=0
-upgrade_available=1
-bootok=0
 recovery=0
 loadaddr=0x82000000
 bootfile=gs2107/boot.scr
@@ -26,5 +23,5 @@ gs_nand_boot=setenv gs_wdt 1; run gs_wdt_arm; if mtd read kernel ${loadaddr}; th
 gs_rescue_boot=setenv gs_wdt 1; run gs_wdt_arm; if mtd read recovery ${loadaddr}; then setenv bootargs "${bootargs_base} gs2107.recovery=1 watchdog.open_timeout=120"; bootm ${loadaddr}; fi; run gs_wdt_disarm; setenv gs_wdt
 gs_wdt_arm=mw.l 0xbfbf012c 0xffffffff; setexpr.l gs_wdt_ctrl *0xbfbf0100 "&" 0xffdfffff; setexpr.l gs_wdt_ctrl ${gs_wdt_ctrl} "|" 0x02000020; mw.l 0xbfbf0100 ${gs_wdt_ctrl}; mw.l 0xbfbf0138 1
 gs_wdt_disarm=setexpr.l gs_wdt_ctrl *0xbfbf0100 "&" 0xfddfffdf; mw.l 0xbfbf0100 ${gs_wdt_ctrl}
-gs_fallback=if test "${recovery}" = "1"; then setenv recovery 0; else setenv recovery 1; fi; setenv bootcount 0; saveenv; run gs_boot
+gs_fallback=if test "${recovery}" = "1"; then setenv recovery 0; else setenv recovery 1; fi; bootcount reset; setenv bootcount; saveenv; run gs_boot
 gs_recovery=echo "GS2107 recovery: USB/network/rescue image/NAND"; run gs_usb_boot; run gs_net_boot; run gs_rescue_boot; run gs_nand_boot
