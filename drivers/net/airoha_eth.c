@@ -445,6 +445,8 @@ struct airoha_eth {
 	struct udevice *switch_mdio_dev;
 	/* EN751221：等链路超时的用户口，之后的 start 不再等它们，直到它们的链路起来 */
 	u32 link_wait_timedout;
+	/* EN751221：U-Boot 经哪些交换芯片用户口收发（位 = 端口号），见 airoha_switch_user_ports() */
+	u32 user_ports;
 
 	struct reset_ctl_bulk rsts;
 	struct reset_ctl_bulk xsi_rsts;
@@ -1183,6 +1185,35 @@ static int airoha_hw_init(struct udevice *dev,
 	return 0;
 }
 
+/*
+ * U-Boot 经哪些用户口收发：全部用户口（0–5）去掉板级 DT 在交换芯片节点的 ethernet-ports（或 ports）子节点里
+ * 标成 label = "wan" 或 disabled 的 port@N（写法同 Linux DSA 的端口绑定）。WAN 口不进转发矩阵，它和 CPU 口之间
+ * 不转发任何帧：U-Boot 的 ARP/TFTP 不从 WAN 出去，WAN 那边网里的主机也接管不了设备的网络启动。没有这个子节点时
+ * 所有用户口都通 CPU 口。
+ */
+static u32 airoha_switch_user_ports(ofnode switch_node)
+{
+	u32 mask = GENMASK(5, 0), reg;
+	ofnode ports, port;
+	const char *label;
+
+	ports = ofnode_find_subnode(switch_node, "ethernet-ports");
+	if (!ofnode_valid(ports))
+		ports = ofnode_find_subnode(switch_node, "ports");
+	if (!ofnode_valid(ports))
+		return mask;
+
+	ofnode_for_each_subnode(port, ports) {
+		if (ofnode_read_u32(port, "reg", &reg) || reg > 5)
+			continue;
+		label = ofnode_read_string(port, "label");
+		if (!ofnode_is_enabled(port) || (label && !strcmp(label, "wan")))
+			mask &= ~BIT(reg);
+	}
+
+	return mask;
+}
+
 static int airoha_switch_init(struct udevice *dev, struct airoha_eth *eth)
 {
 	struct airoha_eth_soc_data *data = (void *)dev_get_driver_data(dev);
@@ -1261,18 +1292,25 @@ static int airoha_switch_init(struct udevice *dev, struct airoha_eth *eth)
 		 * matrix programmed, or no frames pass between ports (the LAN
 		 * GPHYs at MDIO 9-12 are already powered and link fine; the
 		 * en7512 econet stub only set MFC/PMCR and never the matrix).
-		 * Give each user port (0-5) a matrix pointing at the CPU port
-		 * (6) and the CPU port a matrix of all user ports, and mark
-		 * every port a VLAN user port. Mirrors mt753x_port_isolation()
+		 * Give each user port U-Boot uses a matrix pointing at the CPU
+		 * port (6) and the CPU port a matrix of those user ports, and
+		 * mark every port a VLAN user port. Mirrors mt753x_port_isolation()
 		 * / mt7988_setup(): PCR = 0x2004 + p*0x100 (matrix at bit 16),
 		 * PVC = 0x2010 + p*0x100 (STAG 0x8100, VLAN_ATTR_USER).
+		 * 不用的用户口（airoha_switch_user_ports()）矩阵为 0：既不送 CPU，CPU 也不往它转发。
 		 */
+		eth->user_ports = airoha_switch_user_ports(switch_node);
+		if (!(eth->user_ports & GENMASK(4, 1)))
+			printf("%s: no switch LAN port left after excluding WAN/disabled ports; U-Boot networking is cut off\n",
+			       dev->name);
 		{
 			int p;
 
 			for (p = 0; p < 7; p++) {
-				airoha_switch_wr(eth, 0x2004 + p * 0x100,
-						 (u32)(p == 6 ? 0x3f : 0x40) << 16);
+				u32 matrix = p == 6 ? eth->user_ports :
+					     (eth->user_ports & BIT(p) ? BIT(6) : 0);
+
+				airoha_switch_wr(eth, 0x2004 + p * 0x100, matrix << 16);
 				airoha_switch_wr(eth, 0x2010 + p * 0x100,
 						 0x81000000);
 			}
@@ -1597,6 +1635,9 @@ static void en751221_wait_link(struct udevice *dev, struct airoha_eth *eth)
 	for (;;) {
 		waiting = 0;
 		for (port = 1; port <= 4; port++) {
+			/* U-Boot 不用的口（如 WAN）不等 */
+			if (!(eth->user_ports & BIT(port)))
+				continue;
 			if (airoha_switch_rr(eth, SWITCH_PMSR(port)) & SWITCH_PMSR_LINK) {
 				eth->link_wait_timedout &= ~BIT(port);
 				continue;
