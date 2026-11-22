@@ -4,7 +4,7 @@ menu "EcoNet/Airoha EN75xx platforms"
 config SYS_VENDOR
 	default "econet"
 
-# Common SoC-identity flag selected by every EN7528 board (reference/RAM/...).
+# Common SoC-identity flag selected by every EN7528 board (reference/RAM/GS2107).
 config SOC_EN7528
 	bool
 	select MIPS_SKIP_CP0_COUNT_CLEAR
@@ -14,10 +14,12 @@ config SYS_SOC
 	default "en7512"
 
 config SYS_BOARD
+	default "gs2107" if BOARD_GS2107
 	default "en7528" if SOC_EN7528
 	default "en7512"
 
 config SYS_CONFIG_NAME
+	default "gs2107" if BOARD_GS2107
 	default "en7528" if SOC_EN7528
 	default "en7512"
 
@@ -37,6 +39,7 @@ config SYS_ICACHE_LINE_SIZE
 	default 32
 
 config TEXT_BASE
+	default 0x80020000 if BOARD_GS2107
 	default 0x80020000 if BOARD_EN7528_RAM
 	default 0x81000000
 
@@ -54,6 +57,7 @@ config TPL_MAX_SIZE
 
 
 config BUILD_TARGET
+	default "u-boot.bin" if BOARD_GS2107
 	default "u-boot.img" if BOARD_EN7512_REFERENCE
 	default "u-boot.bin" if BOARD_EN7528_REFERENCE
 	default "u-boot.bin" if BOARD_EN7528_RAM
@@ -94,6 +98,12 @@ config BOARD_EN7528_RAM
 	  bring-up path that exercises the whole upper stack (console, DTS, DM,
 	  U-Boot proper) on real EN7528 silicon without needing the DDR stage.
 
+
+config BOARD_GS2107
+	bool "ChinaMobile GS2107 (EcoNet EN7528, tcboot HDR2 chainload)"
+	select SOC_EN7528
+	help
+	  中国移动 GS2107 单槽布局的 U-Boot：RAM 版（gs2107_ram_defconfig）链接在 0x80020000，经 tcboot HDR2 链载的版本（gs2107_chainload_defconfig）把 CONFIG_TEXT_BASE 改到 0x81000000；两者都用 GS2107 的设备树。
 
 endchoice
 
