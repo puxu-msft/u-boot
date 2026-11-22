@@ -1386,3 +1386,30 @@ static int cmd_test_redline_fastboot(struct unit_test_state *uts)
 	return 0;
 }
 CMD_TEST(cmd_test_redline_fastboot, UTF_CONSOLE);
+
+/* ums -r（补丁 0404）：只读 LUN 不是存储写入，红线门放行、不动待确认动作；不带 -r 的照旧拦下 */
+static int cmd_test_redline_ums_ro(struct unit_test_state *uts)
+{
+	struct rl_env e;
+
+	if (!IS_ENABLED(CONFIG_CMD_REDLINE) || !IS_ENABLED(CONFIG_CMD_USB_MASS_STORAGE))
+		return -EAGAIN;
+	ut_assertok(rl_setup(uts, &e));
+	console_record_reset();
+	ut_asserteq(1, run_command("ums 0 mmc 0", 0));
+	ut_assert_nextline(HELD);
+	ut_assert_nextline("  command : ums 0 mmc 0");
+	/* sandbox 没有 UDC：放行后 ums 自己在取控制器时失败，但不是被红线门拦下 */
+	console_record_reset();
+	run_command("ums -r 0 mmc 0", 0);
+	/* 第一行不是红线清单（是 ums 自己取控制器失败的报错） */
+	ut_assert(ut_check_console_line(uts, HELD));
+	console_record_reset();
+	ut_assertok(run_command("redline show", 0));
+	ut_assert_nextline("REDLINE: pending storage write, not executed");
+	ut_assert_nextline("  command : ums 0 mmc 0");
+	rl_teardown(&e);
+
+	return 0;
+}
+CMD_TEST(cmd_test_redline_ums_ro, UTF_CONSOLE);

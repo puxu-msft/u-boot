@@ -628,6 +628,9 @@ static bool rl_ums(struct rl_text *t, const char *name, int argc,
 	char *list, *s, *tok;
 	int part;
 
+	/* ums -r：只读 LUN，主机写不了，不是存储写入 */
+	if (argc > 1 && !strcmp(argv[1], "-r"))
+		return false;
 	rl_puts(t, "  action  : USB mass storage: the USB host gets raw read/write access until the command is stopped\n");
 	if (argc < 3)
 		return true;

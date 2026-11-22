@@ -23,6 +23,7 @@ struct ums {
 	const char *name;
 	struct blk_desc block_dev;
 	int hwpart;
+	bool ro;	/* 只读：主机看到写保护介质，写命令一律以 WRITE PROTECTED 拒绝 */
 };
 
 int fsg_init(struct ums *ums_devs, int count, struct udevice *udc);

@@ -40,6 +40,9 @@ static int ums_write_sector(struct ums *ums_dev,
 	lbaint_t blkstart = start + ums_dev->start_sector;
 	int ret;
 
+	/* 只读的 LUN 由 f_mass_storage 在 SCSI 层拒绝写，这里再挡一次 */
+	if (ums_dev->ro)
+		return 0;
 	ret = blk_dselect_hwpart(block_dev, ums_dev->hwpart);
 	if (ret && ret != -ENOSYS)
 		return ret;
@@ -153,7 +156,15 @@ static int do_usb_mass_storage(struct cmd_tbl *cmdtp, int flag,
 	struct udevice *udc;
 	int rc;
 	int cable_ready_timeout __maybe_unused;
+	bool ro = false;
+	int i;
 
+	/* -r：只读，主机看到写保护介质 */
+	if (argc > 1 && !strcmp(argv[1], "-r")) {
+		ro = true;
+		argc--;
+		argv++;
+	}
 	if (argc < 3)
 		return CMD_RET_USAGE;
 
@@ -169,6 +180,8 @@ static int do_usb_mass_storage(struct cmd_tbl *cmdtp, int flag,
 	rc = ums_init(devtype, devnum);
 	if (rc < 0)
 		return CMD_RET_FAILURE;
+	for (i = 0; i < ums_count; i++)
+		ums[i].ro = ro;
 
 	controller_index = (unsigned int)(simple_strtoul(
 				usb_controller,	NULL, 0));
@@ -263,8 +276,8 @@ cleanup_ums_init:
 	return rc;
 }
 
-U_BOOT_CMD(ums, 4, 1, do_usb_mass_storage,
+U_BOOT_CMD(ums, 5, 1, do_usb_mass_storage,
 	"Use the UMS [USB Mass Storage]",
-	"<USB_controller> [<devtype>] <dev[:part]>  e.g. ums 0 mmc 0\n"
-	"    devtype defaults to mmc"
+	"[-r] <USB_controller> [<devtype>] <dev[:part]>  e.g. ums 0 mmc 0\n"
+	"    devtype defaults to mmc; -r exposes the media read-only"
 );

@@ -2500,6 +2500,8 @@ static struct fsg_common *fsg_common_init(struct fsg_common *common,
 
 	for (i = 0; i < nluns; i++) {
 		common->luns[i].removable = 1;
+		/* fsg_lun_open() 按 initially_ro 设 ro */
+		common->luns[i].initially_ro = ums[i].ro;
 
 		rc = fsg_lun_open(&common->luns[i], ums[i].num_sectors, ums->block_dev.blksz, "");
 		if (rc)
