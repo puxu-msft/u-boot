@@ -9,10 +9,12 @@
  *         Christian Marangi <ansuelsmth@gmail.org>
  */
 
+#include <console.h>
 #include <dm.h>
 #include <dm/device-internal.h>
 #include <dm/devres.h>
 #include <dm/lists.h>
+#include <env.h>
 #include <mapmem.h>
 #include <malloc.h>
 #include <miiphy.h>
@@ -20,6 +22,7 @@
 #include <regmap.h>
 #include <reset.h>
 #include <syscon.h>
+#include <time.h>
 #include <linux/bitfield.h>
 #include <linux/delay.h>
 #include <linux/dma-mapping.h>
@@ -84,6 +87,8 @@
 #define     SWITCH_FORCE_SPD_1000	FIELD_PREP(SWITCH_FORCE_SPD, 0x2)
 #define   SWITCH_FORCE_DPX		BIT(1)
 #define   SWITCH_FORCE_LNK		BIT(0)
+#define SWITCH_PMSR(_n)			(0x3008 + ((_n) * 0x100))
+#define   SWITCH_PMSR_LINK		BIT(0)
 #define SWITCH_SMACCR0			0x30e4
 #define   SMACCR0_MAC2			GENMASK(31, 24)
 #define   SMACCR0_MAC3			GENMASK(23, 16)
@@ -438,6 +443,8 @@ struct airoha_eth {
 	void __iomem *fe_regs;
 	void __iomem *switch_regs;
 	struct udevice *switch_mdio_dev;
+	/* EN751221：等链路超时的用户口，之后的 start 不再等它们，直到它们的链路起来 */
+	u32 link_wait_timedout;
 
 	struct reset_ctl_bulk rsts;
 	struct reset_ctl_bulk xsi_rsts;
@@ -1493,11 +1500,9 @@ static int airoha_eth_probe(struct udevice *dev)
 		return ret;
 
 	/* Airoha switch mdio PHYs maybe used by several GDM devices */
-	if (!data->econet) {
-		mdio_dev = airoha_switch_mdio_init(dev);
-		if (!IS_ERR_OR_NULL(mdio_dev))
-			eth->switch_mdio_dev = mdio_dev;
-	}
+	mdio_dev = airoha_switch_mdio_init(dev);
+	if (!IS_ERR_OR_NULL(mdio_dev))
+		eth->switch_mdio_dev = mdio_dev;
 
 	ofnode_for_each_subnode(node, dev_ofnode(dev)) {
 		if (!ofnode_device_is_compatible(node, "airoha,eth-mac") &&
@@ -1554,9 +1559,6 @@ static int airoha_eth_port_probe(struct udevice *dev)
 		return -EINVAL;
 #endif
 	} else {
-		if (eth->soc->econet)
-			return 0;
-
 		/*
 		 * GDM1 device connected to airoha switch. Probe airoha switch
 		 * mdio to be able set/query states of corresponding LAN ports.
@@ -1569,6 +1571,63 @@ static int airoha_eth_port_probe(struct udevice *dev)
 	}
 
 	return 0;
+}
+
+/* EN751221 用户口 1–4 的 GPHY 在交换芯片 MDIO 上的地址 9–12（同 Linux en7528.dtsi 的 gsw_phy1–4） */
+#define EN751221_GPHY_ADDR(_port)	(8 + (_port))
+
+/*
+ * 开始收发前，等正在与对端自协商的用户口把链路建起来：SoC 复位或对端重启之后 GPHY 要重新协商，这期间发出的帧都丢了，网络层要过 CONFIG_ARP_TIMEOUT 才重发 ARP。
+ * 只等有对端的口：MAC 链路（PMSR，交换芯片轮询 PHY 得来）已经起来的口不等；MII_EXPANSION 的 EXPANSION_NWAY 为 0 的口没有正在协商的对端（没插线、对端关机），也不等，所以不插线不增加启动时间。GS2107 实测 GPHY 断电再上电后约 1.6 s 收到对端的协商码字、EXPANSION_NWAY 置位，约 3.1 s 链路起来；对端重新开始协商较慢时码字到得更晚（同一主机网卡另几次断电后 10 s 以上才重新连上，2–3 s 时码字还没到）。码字到达之前看不出有没有对端，那段时间里发出的 ARP 靠网络层重发（ARP 没应答时每 5 s 重发、约 20 s 放弃）。
+ * 上限与 phylib 等自协商相同（phy_aneg_timeout 环境变量，缺省 CONFIG_PHY_ANEG_TIMEOUT），Ctrl-C 可中断；超时（或被中断）的口记下来，之后的 start 不再等它，直到它的链路起来，免得协商不成的口让每次 start（含 netconsole 每次发送）都等满上限。结果只打印到串口：eth start 期间 netconsole 发不出去。
+ */
+static void en751221_wait_link(struct udevice *dev, struct airoha_eth *eth)
+{
+	struct udevice *mdio = eth->switch_mdio_dev;
+	ulong timeout, start;
+	u32 waiting, waited = 0;
+	bool interrupted = false;
+	int port, exp;
+
+	if (!mdio)
+		return;
+
+	timeout = env_get_ulong("phy_aneg_timeout", 10, CONFIG_PHY_ANEG_TIMEOUT);
+	start = get_timer(0);
+	for (;;) {
+		waiting = 0;
+		for (port = 1; port <= 4; port++) {
+			if (airoha_switch_rr(eth, SWITCH_PMSR(port)) & SWITCH_PMSR_LINK) {
+				eth->link_wait_timedout &= ~BIT(port);
+				continue;
+			}
+			if (eth->link_wait_timedout & BIT(port))
+				continue;
+			exp = dm_mdio_read(mdio, EN751221_GPHY_ADDR(port),
+					   MDIO_DEVAD_NONE, MII_EXPANSION);
+			/* 读失败或读回 0xffff（地址上没有 PHY）都不算有对端 */
+			if (exp > 0 && exp != 0xffff && (exp & EXPANSION_NWAY))
+				waiting |= BIT(port);
+		}
+		waited |= waiting;
+		if (!waiting || get_timer(start) > timeout)
+			break;
+		if (ctrlc()) {
+			interrupted = true;
+			break;
+		}
+		mdelay(10);
+	}
+
+	if (waiting) {
+		eth->link_wait_timedout |= waiting;
+		printf("%s: ports 0x%x still negotiating after %lu ms%s\n",
+		       dev->name, waiting, get_timer(start),
+		       interrupted ? " (interrupted)" : "");
+	} else if (waited) {
+		printf("%s: link up on ports 0x%x after %lu ms\n",
+		       dev->name, waited, get_timer(start));
+	}
 }
 
 static int airoha_eth_init(struct udevice *dev)
@@ -1587,6 +1646,8 @@ static int airoha_eth_init(struct udevice *dev)
 		airoha_qdma_init_rx_desc(q);
 	if (airoha_is_en751221(qdma->eth))
 		en751221_qdma_reset_tx(qdma);
+	if (airoha_is_en751221(qdma->eth))
+		en751221_wait_link(dev, qdma->eth);
 
 	airoha_qdma_set(qdma, REG_QDMA_GLOBAL_CFG,
 			GLOBAL_CFG_TX_DMA_EN_MASK |

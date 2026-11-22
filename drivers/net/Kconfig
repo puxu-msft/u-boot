@@ -128,7 +128,8 @@ config AIROHA_ETH
 	select DEVRES
 	select DM_ETH_PHY if ARCH_AIROHA
 	select DM_RESET if ARCH_AIROHA
-	select MDIO_MT7531_MMIO if ARCH_AIROHA
+	select DM_MDIO if ARCH_EN75XX
+	select MDIO_MT7531_MMIO if ARCH_AIROHA || ARCH_EN75XX
 	help
 	  This Driver support Airoha Ethernet QDMA Driver
 	  Say Y to enable support for the Airoha Ethernet QDMA.

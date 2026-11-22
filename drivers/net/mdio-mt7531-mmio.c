@@ -27,11 +27,19 @@
 #define MT7531_MDIO_TIMEOUT		100000
 #define MT7531_MDIO_SLEEP		20
 
+/*
+ * PHY 间接访问寄存器。switch_regs 存的是交换芯片寄存器的地址值，readl/writel 要指针：ARM 的是宏、接受整数，MIPS 的是函数、只收指针，这里统一换成 void __iomem *。
+ */
+static void __iomem *mt7531_mdio_iac(struct mt7531_mdio_mmio_priv *priv)
+{
+	return (void __iomem *)(uintptr_t)(priv->switch_regs + MT7531_PHY_IAC);
+}
+
 static int mt7531_mdio_wait_busy(struct mt7531_mdio_mmio_priv *priv)
 {
 	unsigned int busy;
 
-	return readl_poll_sleep_timeout(priv->switch_regs + MT7531_PHY_IAC,
+	return readl_poll_sleep_timeout(mt7531_mdio_iac(priv),
 					busy, (busy & MT7531_PHY_ACS_ST) == 0,
 					MT7531_MDIO_SLEEP, MT7531_MDIO_TIMEOUT);
 }
@@ -50,7 +58,7 @@ static int mt7531_mdio_read(struct mt7531_mdio_mmio_priv *priv, int addr, int de
 		      FIELD_PREP(MT7531_MDIO_DEV_ADDR, devad) |
 		      FIELD_PREP(MT7531_MDIO_REG_ADDR_CL45, reg);
 
-		writel(val, priv->switch_regs + MT7531_PHY_IAC);
+		writel(val, mt7531_mdio_iac(priv));
 	}
 
 	if (mt7531_mdio_wait_busy(priv))
@@ -64,12 +72,12 @@ static int mt7531_mdio_read(struct mt7531_mdio_mmio_priv *priv, int addr, int de
 		val |= MT7531_MDIO_ST_CL22 | MT7531_MDIO_CMD_READ_CL22 |
 		       FIELD_PREP(MT7531_MDIO_REG_ADDR_CL22, reg);
 
-	writel(val, priv->switch_regs + MT7531_PHY_IAC);
+	writel(val, mt7531_mdio_iac(priv));
 
 	if (mt7531_mdio_wait_busy(priv))
 		return -ETIMEDOUT;
 
-	val = readl(priv->switch_regs + MT7531_PHY_IAC);
+	val = readl(mt7531_mdio_iac(priv));
 	return val & MT7531_MDIO_RW_DATA;
 }
 
@@ -88,7 +96,7 @@ static int mt7531_mdio_write(struct mt7531_mdio_mmio_priv *priv, int addr, int d
 		      FIELD_PREP(MT7531_MDIO_DEV_ADDR, devad) |
 		      FIELD_PREP(MT7531_MDIO_REG_ADDR_CL45, reg);
 
-		writel(val, priv->switch_regs + MT7531_PHY_IAC);
+		writel(val, mt7531_mdio_iac(priv));
 	}
 
 	if (mt7531_mdio_wait_busy(priv))
@@ -103,7 +111,7 @@ static int mt7531_mdio_write(struct mt7531_mdio_mmio_priv *priv, int addr, int d
 		val |= MT7531_MDIO_ST_CL22 |
 		       FIELD_PREP(MT7531_MDIO_REG_ADDR_CL22, reg);
 
-	writel(val, priv->switch_regs + MT7531_PHY_IAC);
+	writel(val, mt7531_mdio_iac(priv));
 
 	if (mt7531_mdio_wait_busy(priv))
 		return -ETIMEDOUT;

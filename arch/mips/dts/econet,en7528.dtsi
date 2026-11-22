@@ -111,6 +111,12 @@
 			compatible = "mediatek,mt7530";
 			reg = <0x1fb58000 0x8000>;
 			status = "disabled";
+
+			/* 内置 GPHY（用户口 1–4 在地址 9–12），经交换芯片的 PHY 间接访问寄存器读写 */
+			mdio {
+				#address-cells = <1>;
+				#size-cells = <0>;
+			};
 		};
 
 		/*
