@@ -75,6 +75,11 @@
 	};
 };
 
+/* 机身 USB2 口。U 盘都是高速设备，OHCI 不开。 */
+&ehci {
+	status = "okay";
+};
+
 &uart0 {
 	status = "okay";
 };

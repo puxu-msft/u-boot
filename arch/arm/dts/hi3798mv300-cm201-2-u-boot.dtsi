@@ -71,3 +71,15 @@
 	clocks = <&uart_clk>;
 	clock-names = "apb_pclk";
 };
+
+/*
+ * EHCI 的时钟、复位与 INNO PHY 全部由 board_init() 打开（board/cmcc/cm201-2/cm201-2.c）：U-Boot 没有 CRG 时钟驱动，也没有这个 PHY 的驱动，而 PHY 的初始化要夹在控制器复位释放与端口复位释放之间，拆给 DM 做就排不出这个顺序。去掉这些属性后 generic-ehci 只管控制器本身。
+ */
+&ehci {
+	/delete-property/ clocks;
+	/delete-property/ clock-names;
+	/delete-property/ resets;
+	/delete-property/ reset-names;
+	/delete-property/ phys;
+	/delete-property/ phy-names;
+};
