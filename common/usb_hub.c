@@ -244,6 +244,8 @@ static struct usb_hub_device *usb_hub_allocate(void)
 #endif
 
 #define MAX_TRIES 5
+/* 设备枚举的尝试次数，同 Linux drivers/usb/core/hub.c 的 PORT_INIT_TRIES */
+#define PORT_INIT_TRIES 4
 
 static inline const char *portspeed(int portstatus)
 {
@@ -347,7 +349,7 @@ int usb_hub_port_connect_change(struct usb_device *dev, int port)
 {
 	ALLOC_CACHE_ALIGN_BUFFER(struct usb_port_status, portsts, 1);
 	unsigned short portstatus;
-	int ret, speed;
+	int ret, speed, tries;
 
 	/* Check status */
 	ret = usb_get_port_status(dev, port + 1, portsts);
@@ -375,61 +377,78 @@ int usb_hub_port_connect_change(struct usb_device *dev, int port)
 			return -ENOTCONN;
 	}
 
-	/* Reset the port */
-	ret = usb_hub_port_reset(dev, port, &portstatus);
-	if (ret < 0) {
-		if (ret != -ENXIO)
-			printf("cannot reset port %i!?\n", port + 1);
-		return ret;
-	}
-
-	switch (portstatus & USB_PORT_STAT_SPEED_MASK) {
-	case USB_PORT_STAT_SUPER_SPEED:
-		speed = USB_SPEED_SUPER;
-		break;
-	case USB_PORT_STAT_HIGH_SPEED:
-		speed = USB_SPEED_HIGH;
-		break;
-	case USB_PORT_STAT_LOW_SPEED:
-		speed = USB_SPEED_LOW;
-		break;
-	default:
-		speed = USB_SPEED_FULL;
-		break;
-	}
-
 	/*
-	 * USB 2.0 7.1.7.5: devices must be able to accept a SetAddress()
-	 * request (refer to Section 11.24.2 and Section 9.4 respectively)
-	 * after the reset recovery time 10 ms
+	 * 与 Linux 的 hub_port_connect 一样，枚举失败就复位端口重来，至多 PORT_INIT_TRIES 次：有的设备在主机
+	 * 重新初始化之后第一次取设备描述符不应答。设备被忽略或不兼容（-ENODEV）时不重试；设备被拔掉时，
+	 * 下一轮的端口复位失败返回。
 	 */
-	mdelay(10);
+	for (tries = 0; tries < PORT_INIT_TRIES; tries++) {
+		if (tries)
+			printf("USB port %d: enumeration failed (%d), resetting the port and retrying (%d/%d)\n",
+			       port + 1, ret, tries + 1, PORT_INIT_TRIES);
+
+		/* Reset the port */
+		ret = usb_hub_port_reset(dev, port, &portstatus);
+		if (ret < 0) {
+			if (ret != -ENXIO)
+				printf("cannot reset port %i!?\n", port + 1);
+			return ret;
+		}
+
+		switch (portstatus & USB_PORT_STAT_SPEED_MASK) {
+		case USB_PORT_STAT_SUPER_SPEED:
+			speed = USB_SPEED_SUPER;
+			break;
+		case USB_PORT_STAT_HIGH_SPEED:
+			speed = USB_SPEED_HIGH;
+			break;
+		case USB_PORT_STAT_LOW_SPEED:
+			speed = USB_SPEED_LOW;
+			break;
+		default:
+			speed = USB_SPEED_FULL;
+			break;
+		}
+
+		/*
+		 * USB 2.0 7.1.7.5: devices must be able to accept a SetAddress()
+		 * request (refer to Section 11.24.2 and Section 9.4 respectively)
+		 * after the reset recovery time 10 ms
+		 */
+		mdelay(10);
 
 #if CONFIG_IS_ENABLED(DM_USB)
-	struct udevice *child;
+		struct udevice *child;
 
-	ret = usb_scan_device(dev->dev, port + 1, speed, &child);
+		ret = usb_scan_device(dev->dev, port + 1, speed, &child);
 #else
-	struct usb_device *usb;
+		struct usb_device *usb;
 
-	ret = usb_alloc_new_device(dev->controller, &usb);
-	if (ret) {
-		printf("cannot create new device: ret=%d", ret);
-		return ret;
-	}
+		ret = usb_alloc_new_device(dev->controller, &usb);
+		if (ret) {
+			printf("cannot create new device: ret=%d", ret);
+			return ret;
+		}
 
-	dev->children[port] = usb;
-	usb->speed = speed;
-	usb->parent = dev;
-	usb->portnr = port + 1;
-	/* Run it through the hoops (find a driver, etc) */
-	ret = usb_new_device(usb);
-	if (ret < 0) {
-		/* Woops, disable the port */
-		usb_free_device(dev->controller);
-		dev->children[port] = NULL;
-	}
+		dev->children[port] = usb;
+		usb->speed = speed;
+		usb->parent = dev;
+		usb->portnr = port + 1;
+		/* Run it through the hoops (find a driver, etc) */
+		ret = usb_new_device(usb);
+		if (ret < 0) {
+			/* Woops, disable the port */
+			usb_free_device(dev->controller);
+			dev->children[port] = NULL;
+		}
 #endif
+		if (ret >= 0 || ret == -ENODEV)
+			break;
+	}
+	if (ret < 0 && ret != -ENODEV)
+		printf("USB port %d: unable to enumerate the device (error=%d)\n",
+		       port + 1, ret);
+
 	if (ret < 0) {
 		debug("hub: disabling port %d\n", port + 1);
 		usb_clear_port_feature(dev, port + 1, USB_PORT_FEAT_ENABLE);
