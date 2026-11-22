@@ -1282,8 +1282,11 @@ unknown:
 		case USB_RECIP_DEVICE:
 			debug("cdev->config->next_interface_id: %d intf: %d\n",
 			       cdev->config->next_interface_id, intf);
+			/*
+			 * 设备级请求的 wIndex 不是接口号（Amlogic 线刷协议的厂商请求带 2 或块数），单接口配置一律交给唯一的接口
+			 */
 			if (cdev->config->next_interface_id == 1)
-				f = cdev->config->interface[intf];
+				f = cdev->config->interface[0];
 			break;
 		}
 

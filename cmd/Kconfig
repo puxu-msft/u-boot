@@ -1216,6 +1216,12 @@ config CMD_DM
 	  can be useful to see the state of driver model for debugging or
 	  interest.
 
+config CMD_OPTIMUS
+	bool "optimus - Amlogic USB burning (Optimus) mode"
+	depends on USB_FUNCTION_OPTIMUS
+	help
+	  optimus [-t <毫秒>] <USB 控制器>：进入 Amlogic USB 线刷态，停到主机经命令请求离开（optimus leave）、Ctrl-C 或出错为止；-t 给出探测窗口，窗口内主机没有设配置就返回失败。optimus leave：在线刷态执行的命令里调用，请线刷态在这条命令的应答送出后退出。
+
 config CMD_FASTBOOT
 	bool "fastboot - Android fastboot support"
 	depends on FASTBOOT

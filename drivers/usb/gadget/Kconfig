@@ -229,6 +229,12 @@ config USB_FUNCTION_ACM
 	  interoperate with MS-Windows hosts or with the Linux-USB "cdc-acm"
 	  driver.
 
+config USB_FUNCTION_OPTIMUS
+	bool "Enable the Amlogic USB burning (Optimus) gadget"
+	depends on OPTIMUS
+	help
+	  Amlogic USB 线刷态的 USB 设备函数：以厂商 u-boot 线刷态的形态枚举（VID:PID 1b8e:c003、bcdDevice 0x0007、一个厂商类接口带一对 bulk 端点），控制请求与 bulk 数据交给 OPTIMUS 协议核心。它定义了 g_dnl 的弱钩子 g_dnl_bind_fixup() 与 g_dnl_get_board_bcd_device_number()，只在绑定 usb_dnl_optimus 时换 VID:PID 与 bcdDevice；板级代码另有这两个钩子时要把逻辑合并。
+
 endif # USB_GADGET_DOWNLOAD
 
 config USB_ETHER

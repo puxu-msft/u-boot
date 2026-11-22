@@ -111,4 +111,12 @@ int optimus_request_leave(void);
 /** optimus_current() - 当前实例；不在线刷态时为 NULL */
 struct optimus *optimus_current(void);
 
+/**
+ * f_optimus_run() - 在 USB 设备控制器 @controller 上进入线刷态（drivers/usb/gadget/f_optimus.c）
+ *
+ * @probe_ms:	非 0 时是探测窗口：这么久里主机没有设配置就退出
+ * Return: 0 离开（命令请求离开、Ctrl-C）；-ETIMEDOUT 探测窗口内没有主机；其余负数是 USB 初始化失败
+ */
+int f_optimus_run(int controller, ulong probe_ms);
+
 #endif /* __OPTIMUS_H */
