@@ -1387,23 +1387,55 @@ static int cmd_test_redline_fastboot(struct unit_test_state *uts)
 }
 CMD_TEST(cmd_test_redline_fastboot, UTF_CONSOLE);
 
-/* ums -r（补丁 0404）：只读 LUN 不是存储写入，红线门放行、不动待确认动作；不带 -r 的照旧拦下 */
+/*
+ * ums -r（补丁 0404）：只读 LUN 不是存储写入，红线门放行、不动待确认动作；不带 -r 的照旧拦下。-t <ms>（补丁 0407）与 -r 顺序不限，
+ * 红线门与命令共用选项解析：带 -t 的只读照样放行，带 -t 的读写照样拦下且清单按选项之后的参数取设备
+ */
 static int cmd_test_redline_ums_ro(struct unit_test_state *uts)
 {
+	static const char *const ro_cmds[] = {
+		"ums -r 0 mmc 0", "ums -r -t 30000 0 mmc 0", "ums -t 30000 -r 0 mmc 0",
+	};
 	struct rl_env e;
+	int i;
 
 	if (!IS_ENABLED(CONFIG_CMD_REDLINE) || !IS_ENABLED(CONFIG_CMD_USB_MASS_STORAGE))
 		return -EAGAIN;
 	ut_assertok(rl_setup(uts, &e));
 	console_record_reset();
+	ut_asserteq(1, run_command("ums -t 30000 0 mmc 0:2", 0));
+	ut_assert_nextline(HELD);
+	ut_assert_nextline("  command : ums -t 30000 0 mmc 0:2");
+	ut_assert_nextline("  action  : USB mass storage: the USB host gets raw read/write access until the command is stopped");
+	ut_assert_nextline("  exposed : partition 2 'mmcsda2' of mmc 0:2");
+	console_record_reset();
 	ut_asserteq(1, run_command("ums 0 mmc 0", 0));
 	ut_assert_nextline(HELD);
 	ut_assert_nextline("  command : ums 0 mmc 0");
-	/* sandbox 没有 UDC：放行后 ums 自己在取控制器时失败，但不是被红线门拦下 */
+	for (i = 0; i < ARRAY_SIZE(ro_cmds); i++) {
+		/* sandbox 没有 UDC：放行后 ums 自己在取控制器时失败，但不是被红线门拦下 */
+		console_record_reset();
+		ut_asserteq(1, run_command(ro_cmds[i], 0));
+		/* 第一行不是红线清单（是 ums 自己取控制器失败的报错） */
+		ut_assert(ut_check_console_line(uts, HELD));
+	}
+	/* -t 的值不对、不认识的选项：命令按用法错误返回，不经红线门 */
 	console_record_reset();
-	run_command("ums -r 0 mmc 0", 0);
-	/* 第一行不是红线清单（是 ums 自己取控制器失败的报错） */
+	ut_asserteq(1, run_command("ums -t 0 0 mmc 0", 0));
 	ut_assert(ut_check_console_line(uts, HELD));
+	console_record_reset();
+	ut_asserteq(1, run_command("ums -x 0 mmc 0", 0));
+	ut_assert(ut_check_console_line(uts, HELD));
+	/* 选项之后的参数多了、少了：只读与读写形态都按用法错误返回（第一行是用法），不经红线门 */
+	console_record_reset();
+	ut_asserteq(1, run_command("ums -r 0 mmc 0 extra", 0));
+	ut_assert_nextline("ums - Use the UMS [USB Mass Storage]");
+	console_record_reset();
+	ut_asserteq(1, run_command("ums -t 30000 0 mmc 0 extra", 0));
+	ut_assert_nextline("ums - Use the UMS [USB Mass Storage]");
+	console_record_reset();
+	ut_asserteq(1, run_command("ums -r 0", 0));
+	ut_assert_nextline("ums - Use the UMS [USB Mass Storage]");
 	console_record_reset();
 	ut_assertok(run_command("redline show", 0));
 	ut_assert_nextline("REDLINE: pending storage write, not executed");

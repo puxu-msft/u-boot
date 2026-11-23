@@ -156,17 +156,15 @@ static int do_usb_mass_storage(struct cmd_tbl *cmdtp, int flag,
 	struct udevice *udc;
 	int rc;
 	int cable_ready_timeout __maybe_unused;
-	bool ro = false;
+	ulong idle_ms;
+	bool ro;
 	int i;
 
-	/* -r：只读，主机看到写保护介质 */
-	if (argc > 1 && !strcmp(argv[1], "-r")) {
-		ro = true;
-		argc--;
-		argv++;
-	}
-	if (argc < 3)
+	i = ums_parse_opts(argc, argv, &ro, &idle_ms);
+	if (i < 0)
 		return CMD_RET_USAGE;
+	argc -= i;
+	argv += i;
 
 	usb_controller = argv[1];
 	if (argc >= 4) {
@@ -192,7 +190,7 @@ static int do_usb_mass_storage(struct cmd_tbl *cmdtp, int flag,
 		goto cleanup_ums_init;
 	}
 
-	rc = fsg_init(ums, ums_count, udc);
+	rc = fsg_init(ums, ums_count, udc, idle_ms);
 	if (rc) {
 		pr_err("fsg_init failed\n");
 		rc = CMD_RET_FAILURE;
@@ -249,6 +247,9 @@ static int do_usb_mass_storage(struct cmd_tbl *cmdtp, int flag,
 			if (rc == -EPIPE)
 				printf("\rCTRL+C - Operation aborted\n");
 
+			if (rc == -ETIMEDOUT)
+				printf("\rums: no command for %lu ms, leaving\n", idle_ms);
+
 			rc = CMD_RET_SUCCESS;
 			goto cleanup_register;
 		}
@@ -276,8 +277,9 @@ cleanup_ums_init:
 	return rc;
 }
 
-U_BOOT_CMD(ums, 5, 1, do_usb_mass_storage,
+U_BOOT_CMD(ums, 7, 1, do_usb_mass_storage,
 	"Use the UMS [USB Mass Storage]",
-	"[-r] <USB_controller> [<devtype>] <dev[:part]>  e.g. ums 0 mmc 0\n"
-	"    devtype defaults to mmc; -r exposes the media read-only"
+	"[-r] [-t <ms>] <USB_controller> [<devtype>] <dev[:part]>  e.g. ums 0 mmc 0\n"
+	"    devtype defaults to mmc; -r exposes the media read-only;\n"
+	"    -t leaves when the host sends no command for <ms> milliseconds"
 );

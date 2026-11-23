@@ -648,6 +648,13 @@ static void busy_indicator(void)
 		state = 0;
 }
 
+/*
+ * ums -t：主机多久没有发命令就离开（0 = 不限）。从 fsg_init() 起算，每收到一个 CBW 重新计；本机拿不到 VBUS 状态
+ * （g_dnl_board_usb_cable_connected() 没有实现），拔线后靠它离开
+ */
+static ulong ums_idle_ms;
+static ulong ums_last_cmd;
+
 static int sleep_thread(struct fsg_common *common)
 {
 	int	rc = 0;
@@ -676,6 +683,9 @@ static int sleep_thread(struct fsg_common *common)
 			/* Check cable connection */
 			if (!g_dnl_board_usb_cable_connected())
 				return -EIO;
+
+			if (ums_idle_ms && get_timer(ums_last_cmd) > ums_idle_ms)
+				return -ETIMEDOUT;
 
 			k = 0;
 		}
@@ -2144,6 +2154,7 @@ static int get_next_command(struct fsg_common *common)
 		if (rc)
 			return rc;
 	}
+	ums_last_cmd = get_timer(0);
 
 	rc = fsg_is_set(common) ? received_cbw(common->fsg, bh) : -EIO;
 	bh->state = BUF_STATE_EMPTY;
@@ -2779,11 +2790,13 @@ int fsg_add(struct usb_configuration *c)
 	return fsg_bind_config(c->cdev, c, fsg_common);
 }
 
-int fsg_init(struct ums *ums_devs, int count, struct udevice *udc)
+int fsg_init(struct ums *ums_devs, int count, struct udevice *udc, ulong idle_ms)
 {
 	ums = ums_devs;
 	ums_count = count;
 	udcdev = udc;
+	ums_idle_ms = idle_ms;
+	ums_last_cmd = get_timer(0);
 
 	return 0;
 }

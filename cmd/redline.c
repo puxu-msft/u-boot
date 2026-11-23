@@ -23,6 +23,7 @@
 #include <part.h>
 #include <sparse_format.h>
 #include <usb.h>
+#include <usb_mass_storage.h>
 #include <vsprintf.h>
 #include <asm/byteorder.h>
 #include <asm/global_data.h>
@@ -622,18 +623,22 @@ static bool rl_gzwrite(struct rl_text *t, const char *name, int argc,
 static bool rl_ums(struct rl_text *t, const char *name, int argc,
 		   char *const argv[])
 {
-	const char *devtype = argc >= 4 ? argv[2] : "mmc";
+	const char *devtype;
 	struct disk_partition info;
 	struct blk_desc *desc;
 	char *list, *s, *tok;
-	int part;
+	ulong idle_ms;
+	int part, n;
+	bool ro;
 
-	/* ums -r：只读 LUN，主机写不了，不是存储写入 */
-	if (argc > 1 && !strcmp(argv[1], "-r"))
+	/* ums -r：只读 LUN，主机写不了，不是存储写入；选项或参数个数不对时命令按用法错误返回，也不写。解析与命令共用 */
+	n = ums_parse_opts(argc, argv, &ro, &idle_ms);
+	if (n < 0 || ro)
 		return false;
+	argc -= n;
+	argv += n;
+	devtype = argc >= 4 ? argv[2] : "mmc";
 	rl_puts(t, "  action  : USB mass storage: the USB host gets raw read/write access until the command is stopped\n");
-	if (argc < 3)
-		return true;
 	list = strdup(argc >= 4 ? argv[3] : argv[2]);
 	if (!list) {
 		t->oom = true;
