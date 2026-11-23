@@ -129,6 +129,15 @@ out:
 }
 
 /**
+ * fastboot_clear_reboot_flag() - fastboot 会话没有复位就结束时撤销重启标记
+ *
+ * 缺省什么也不做：缺省的 fastboot_set_reboot_flag() 把标记写进 misc 的 BCB，由下一次启动自己消费
+ */
+void __weak fastboot_clear_reboot_flag(void)
+{
+}
+
+/**
  * fastboot_get_progress_callback() - Return progress callback
  *
  * Return: Pointer to function called during long operations

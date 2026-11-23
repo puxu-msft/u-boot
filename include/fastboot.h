@@ -106,6 +106,14 @@ void fastboot_okay(const char *reason, char *response);
 int fastboot_set_reboot_flag(enum fastboot_reboot_reason reason);
 
 /**
+ * fastboot_clear_reboot_flag() - 撤销没用上的重启标记
+ *
+ * fastboot 命令在会话结束、而 fastboot_set_reboot_flag() 准备的那次复位没有发生时调用。
+ * 把标记记在内存里、等下一次复位才交出去的板子覆盖它，免得之后与 fastboot 无关的复位也带上标记。
+ */
+void fastboot_clear_reboot_flag(void);
+
+/**
  * fastboot_set_progress_callback() - set progress callback
  *
  * @progress: Pointer to progress callback

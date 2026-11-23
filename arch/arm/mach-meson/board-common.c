@@ -16,6 +16,7 @@
 #include <linux/libfdt.h>
 #include <linux/err.h>
 #include <asm/arch/mem.h>
+#include <asm/arch/reboot.h>
 #include <asm/arch/sm.h>
 #include <asm/armv8/mmu.h>
 #include <asm/unaligned.h>
@@ -216,24 +217,25 @@ int board_late_init(void)
 
 #if CONFIG_IS_ENABLED(FASTBOOT) && !defined(CONFIG_XPL)
 /*
- * fastboot reboot-bootloader/reboot-fastboot/reboot-recovery 的重启标记：不写 misc 的 BCB（厂商 u-boot 在线刷探测之前读它，chainload 期间写进去会改变下一次厂商路径的启动），改为 Amlogic 重启原因，随 PSCI SYSTEM_RESET 的 x1 交给 BL31（它无条件把 x1 写成原因，先经 SiP 0x82000049 设的会被覆盖）。
- * 取值按厂商原因表：bootloader 与 fastboot 都用 fastboot（4）——厂商 BL33 见到 4 进它的 fastboot，见到 bootloader（7）照常启动；recovery 用 2。主线作 BL33 时由 m12.env 的冷启动入口分流（4 → fastboot 后进救援，2 暂按普通启动）；chainload 下复位后先跑厂商 BL33，由它按原因处理
+ * fastboot reboot-bootloader/reboot-fastboot 的重启标记：不写 misc 的 BCB（厂商 u-boot 在线刷探测之前读它，chainload 期间写进去会改变下一次厂商路径的启动），改为 Amlogic 重启原因，随 PSCI SYSTEM_RESET 的 x1 交给 BL31（它无条件把 x1 写成原因，先经 SiP 0x82000049 设的会被覆盖）。取值与不支持的 reboot-recovery 见 asm/arch/reboot.h。
+ * 标记只交给紧接着的那次复位：fastboot 会话没有复位就结束时 fastboot_clear_reboot_flag() 把它清掉，之后与 fastboot 无关的复位照常带 0
  */
 static unsigned long meson_reboot_reason;
 
 int fastboot_set_reboot_flag(enum fastboot_reboot_reason reason)
 {
-	switch (reason) {
-	case FASTBOOT_REBOOT_REASON_BOOTLOADER:
-	case FASTBOOT_REBOOT_REASON_FASTBOOTD:
-		meson_reboot_reason = REBOOT_REASON_FASTBOOT;
-		return 0;
-	case FASTBOOT_REBOOT_REASON_RECOVERY:
-		meson_reboot_reason = REBOOT_REASON_RECOVERY;
-		return 0;
-	default:
-		return -EINVAL;
-	}
+	long r = meson_fastboot_reboot_reason(reason);
+
+	if (r < 0)
+		return r;
+	meson_reboot_reason = r;
+
+	return 0;
+}
+
+void fastboot_clear_reboot_flag(void)
+{
+	meson_reboot_reason = 0;
 }
 
 unsigned long psci_sys_reset_arg(void)

@@ -131,6 +131,7 @@ static int do_fastboot(struct cmd_tbl *cmdtp, int flag, int argc,
 {
 	uintptr_t buf_addr = (uintptr_t)NULL;
 	size_t buf_size = 0;
+	int ret;
 
 	if (argc < 2)
 		return CMD_RET_USAGE;
@@ -171,16 +172,22 @@ NXTARG:
 
 #if CONFIG_IS_ENABLED(NET_LEGACY)
 	if (!strcmp(argv[1], "udp"))
-		return do_fastboot_udp(argc, argv, buf_addr, buf_size);
-	if (!strcmp(argv[1], "tcp"))
-		return do_fastboot_tcp(argc, argv, buf_addr, buf_size);
+		ret = do_fastboot_udp(argc, argv, buf_addr, buf_size);
+	else if (!strcmp(argv[1], "tcp"))
+		ret = do_fastboot_tcp(argc, argv, buf_addr, buf_size);
+	else
 #endif
-	if (!strcmp(argv[1], "usb")) {
-		argv++;
-		argc--;
+	{
+		if (!strcmp(argv[1], "usb")) {
+			argv++;
+			argc--;
+		}
+		ret = do_fastboot_usb(argc, argv, buf_addr, buf_size);
 	}
+	/* 会话结束而没有复位：reboot-bootloader 等记下的标记作废 */
+	fastboot_clear_reboot_flag();
 
-	return do_fastboot_usb(argc, argv, buf_addr, buf_size);
+	return ret;
 }
 
 U_BOOT_CMD(
