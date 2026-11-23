@@ -325,7 +325,7 @@ static int opti_add(struct usb_configuration *c)
 
 DECLARE_GADGET_BIND_CALLBACK(usb_dnl_optimus, opti_add);
 
-int f_optimus_run(int controller, ulong probe_ms)
+static int f_optimus_session(int controller, ulong probe_ms, char **deferred)
 {
 	struct f_optimus *f;
 	struct udevice *udc;
@@ -379,10 +379,35 @@ out_put:
 	g_dnl_set_product(NULL);
 	udc_device_put(udc);
 out_core:
+	*deferred = f->core.deferred;
+	f->core.deferred = NULL;
 	optimus_release(&f->core);
 	opti = NULL;
 out_free:
 	free(f);
+
+	return ret;
+}
+
+/*
+ * 线刷态里确认的动作要占用 UDC 时（redline yes 确认 ums、fastboot），核心把它记下并请求离开：这里在 USB 已经释放之后执行它，结束后重新进线刷态（不再计探测窗口），从调用方看仍是同一次 optimus
+ */
+int f_optimus_run(int controller, ulong probe_ms)
+{
+	char *deferred = NULL;
+	int ret;
+
+	for (;;) {
+		ret = f_optimus_session(controller, probe_ms, &deferred);
+		if (ret || !deferred)
+			break;
+		printf("optimus: running '%s' outside USB burning mode\n", deferred);
+		run_command(deferred, 0);
+		free(deferred);
+		deferred = NULL;
+		probe_ms = 0;
+	}
+	free(deferred);
 
 	return ret;
 }

@@ -65,6 +65,7 @@ struct optimus {
 	const char *frame_err;		/* 控制头就不合格时的原因：照收数据，应答报错 */
 
 	bool leave;			/* 命令请求离开线刷态（optimus leave） */
+	char *deferred;			/* 离开 USB 之后要执行的命令（redline yes 确认的动作要占用 UDC 时），由传输层取走执行 */
 };
 
 /**
@@ -96,7 +97,7 @@ void optimus_bulk_out_done(struct optimus *o, unsigned int len);
 /**
  * optimus_run() - 执行一条命令词（bulk 命令与 TPL 命令共用），结果写进 o->reply
  *
- * download/upload/low_power 由协议层处理；其余交给 run_command()，执行前调 redline_input_next()：每条主机命令是一次新输入
+ * download/upload/low_power 由协议层处理；其余交给 run_command()，执行前调 redline_input_next()：每条主机命令是一次新输入。redline yes 而待确认的动作要占用 UDC（ums、fastboot）时不在这里执行：记进 o->deferred 并请求离开，传输层离开 USB 之后执行它
  * Return: 0 成功
  */
 int optimus_run(struct optimus *o, const char *cmd);

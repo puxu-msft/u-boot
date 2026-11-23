@@ -620,3 +620,36 @@ static int cmd_test_optimus_leave(struct unit_test_state *uts)
 	return 0;
 }
 CMD_TEST(cmd_test_optimus_leave, 0);
+
+/* 线刷会话里 ums 被拦、redline yes 确认：推迟到离开 USB 之后（回 success、请求离开、记下命令，待确认动作还在），在会话外执行时红线门放行；确认 mmc write 时照常就地执行（补丁 0507） */
+static int cmd_test_optimus_defer(struct unit_test_state *uts)
+{
+	struct fake *f;
+
+	if (!IS_ENABLED(CONFIG_CMD_REDLINE) || !IS_ENABLED(CONFIG_CMD_USB_MASS_STORAGE))
+		return -EAGAIN;
+	f = fake_new();
+	ut_assertnonnull(f);
+	run_command("redline cancel", 0);
+	ut_asserteq_str("failed:", bulkcmd(f, "ums 0 mmc 0"));
+	ut_assert(redline_pending_needs_udc());
+	ut_asserteq_str("success", bulkcmd(f, "redline yes"));
+	ut_assert(f->o.leave);
+	ut_assertnonnull(f->o.deferred);
+	ut_asserteq_str("redline yes", f->o.deferred);
+	ut_assertok(run_command("redline show", 0));
+	/* 照 f_optimus 的做法在线刷会话之外执行记下的命令：红线门照常放行（同一次输入的代次，被拦的在更早一次），ums 随之执行并作废待确认动作；sandbox 没有 UDC，ums 自己取控制器失败 */
+	run_command(f->o.deferred, 0);
+	ut_asserteq(1, run_command("redline show", 0));
+	/* 待确认的是 mmc write：不推迟 */
+	f->o.leave = false;
+	ut_asserteq_str("failed:", bulkcmd(f, "mmc write 1000000 40 1"));
+	ut_assert(!redline_pending_needs_udc());
+	ut_asserteq_str("success", bulkcmd(f, "redline yes"));
+	ut_assert(!f->o.leave);
+	run_command("redline cancel", 0);
+	fake_free(f);
+
+	return 0;
+}
+CMD_TEST(cmd_test_optimus_defer, 0);

@@ -322,7 +322,19 @@ ulong redline_sm_input_buffer(void);
 bool redline_hold_fastboot(bool erase, const char *part, ulong addr, u32 size,
 			   int (*run)(bool erase, const char *part, ulong addr,
 				      u32 size));
+
+/**
+ * redline_pending_needs_udc() - 待确认的动作要占用 USB 设备控制器（cmd/redline.c）
+ *
+ * 待确认的是 ums、fastboot、dfu 这类自己起 USB 设备函数的命令时为 true。在 USB 设备函数里执行命令的通道（Optimus 线刷态的 bulk 命令）据此把 redline yes 推迟到离开 USB 之后执行，否则嵌套起的函数取不到 UDC
+ */
+bool redline_pending_needs_udc(void);
 #else
+static inline bool redline_pending_needs_udc(void)
+{
+	return false;
+}
+
 static inline int redline_gate(struct cmd_tbl *cmdtp, int argc,
 			       char *const argv[])
 {

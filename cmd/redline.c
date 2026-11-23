@@ -1331,6 +1331,20 @@ static int rl_yes_fastboot(void)
 	return ret ? CMD_RET_FAILURE : CMD_RET_SUCCESS;
 }
 
+bool redline_pending_needs_udc(void)
+{
+	static const char *const udc_cmds[] = {
+		"ums", "fastboot", "dfu", "thordown", "rockusb", "sdp", "optimus",
+	};
+	struct cmd_tbl *cmdtp;
+
+	if (!rl_pending.text || rl_pending.fb_run)
+		return false;
+	cmdtp = find_cmd(rl_pending.argv[0]);
+
+	return cmdtp && rl_in(cmdtp->name, udc_cmds, ARRAY_SIZE(udc_cmds));
+}
+
 static int rl_yes(void)
 {
 	struct rl_text t = {};

@@ -73,6 +73,8 @@ void optimus_release(struct optimus *o)
 {
 	free(o->frame);
 	o->frame = NULL;
+	free(o->deferred);
+	o->deferred = NULL;
 	if (optimus_cur == o)
 		optimus_cur = NULL;
 }
@@ -224,7 +226,19 @@ int optimus_run(struct optimus *o, const char *cmd)
 	} else {
 		/* 每条主机命令是一次新输入：红线门据此区分“同一次输入里的自确认” */
 		redline_input_next();
-		ret = run_command(cmd, 0);
+		if (argc == 2 && !strcmp(argv[0], "redline") && !strcmp(argv[1], "yes") &&
+		    redline_pending_needs_udc()) {
+			/* 被拦的是 ums、fastboot 这类要占用 UDC 的命令：先回应答、离开 USB，再由传输层执行（同一次输入，代次不再加） */
+			free(o->deferred);
+			o->deferred = strdup(cmd);
+			o->leave = true;
+			ret = o->deferred ? 0 : -ENOMEM;
+			why = "out of memory";
+			if (!ret)
+				printf("optimus: '%s' runs after leaving USB burning mode\n", cmd);
+		} else {
+			ret = run_command(cmd, 0);
+		}
 	}
 	memset(o->reply, '\0', sizeof(o->reply));
 	if (ret)
