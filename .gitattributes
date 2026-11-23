@@ -6,3 +6,6 @@
 *.ttf binary
 *.gz binary
 *.png binary
+
+# 设备树源码按文本 diff 与合并：用户级 attributes 可能按 DTS 音频把 *.dts 标成 binary（-diff -merge -text），这里写回；text 由上面的 * 规则给出
+*.dts diff merge
