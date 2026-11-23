@@ -11,7 +11,9 @@
 #include <g_dnl.h>
 #include <fastboot.h>
 #include <net.h>
+#include <time.h>
 #include <usb.h>
+#include <vsprintf.h>
 #include <watchdog.h>
 #include <linux/printk.h>
 #include <linux/stringify.h>
@@ -59,8 +61,9 @@ static int do_fastboot_tcp(int argc, char *const argv[],
 #endif
 
 static int do_fastboot_usb(int argc, char *const argv[],
-			   uintptr_t buf_addr, size_t buf_size)
+			   uintptr_t buf_addr, size_t buf_size, ulong probe_ms)
 {
+	ulong start;
 	int controller_index;
 	char *usb_controller;
 	struct udevice *udc;
@@ -100,9 +103,18 @@ static int do_fastboot_usb(int argc, char *const argv[],
 		goto exit;
 	}
 
+	start = get_timer(0);
+	if (probe_ms)
+		printf("fastboot: waiting %lu ms for a USB host\n", probe_ms);
 	while (1) {
 		if (g_dnl_detach())
 			break;
+		if (probe_ms && !fastboot_usb_host_seen() &&
+		    get_timer(start) > probe_ms) {
+			printf("fastboot: no USB host within %lu ms\n", probe_ms);
+			ret = CMD_RET_FAILURE;
+			goto exit;
+		}
 		if (IS_ENABLED(CONFIG_CMD_FASTBOOT_ABORT_KEYED)) {
 			if (tstc()) {
 				getchar();
@@ -131,6 +143,8 @@ static int do_fastboot(struct cmd_tbl *cmdtp, int flag, int argc,
 {
 	uintptr_t buf_addr = (uintptr_t)NULL;
 	size_t buf_size = 0;
+	ulong probe_ms = 0;
+	char *end;
 	int ret;
 
 	if (argc < 2)
@@ -154,6 +168,15 @@ static int do_fastboot(struct cmd_tbl *cmdtp, int flag, int argc,
 				buf_size = hextoul(*++argv, NULL);
 				goto NXTARG;
 
+			case 't':
+				/* 探测窗口：毫秒，解析与 optimus -t 相同（十进制；照 U-Boot 惯例也认 0x 前缀） */
+				if (--argc <= 0)
+					return CMD_RET_USAGE;
+				probe_ms = simple_strtoul(*++argv, &end, 10);
+				if (*end || !probe_ms)
+					return CMD_RET_USAGE;
+				goto NXTARG;
+
 			default:
 				return CMD_RET_USAGE;
 			}
@@ -171,6 +194,8 @@ NXTARG:
 	fastboot_init((void *)buf_addr, buf_size);
 
 #if CONFIG_IS_ENABLED(NET_LEGACY)
+	if (probe_ms && (!strcmp(argv[1], "udp") || !strcmp(argv[1], "tcp")))
+		return CMD_RET_USAGE;
 	if (!strcmp(argv[1], "udp"))
 		ret = do_fastboot_udp(argc, argv, buf_addr, buf_size);
 	else if (!strcmp(argv[1], "tcp"))
@@ -182,7 +207,7 @@ NXTARG:
 			argv++;
 			argc--;
 		}
-		ret = do_fastboot_usb(argc, argv, buf_addr, buf_size);
+		ret = do_fastboot_usb(argc, argv, buf_addr, buf_size, probe_ms);
 	}
 	/* 会话结束而没有复位：reboot-bootloader 等记下的标记作废 */
 	fastboot_clear_reboot_flag();
@@ -193,9 +218,11 @@ NXTARG:
 U_BOOT_CMD(
 	fastboot, CONFIG_SYS_MAXARGS, 1, do_fastboot,
 	"run as a fastboot usb or udp device",
-	"[-l addr] [-s size] usb <controller> | udp\n"
+	"[-l addr] [-s size] [-t ms] usb <controller> | udp\n"
 	"\taddr - address of buffer used during data transfers ("
 	__stringify(CONFIG_FASTBOOT_BUF_ADDR) ")\n"
 	"\tsize - size of buffer used during data transfers ("
-	__stringify(CONFIG_FASTBOOT_BUF_SIZE) ")"
+	__stringify(CONFIG_FASTBOOT_BUF_SIZE) ")\n"
+	"\tms   - (usb) give up if no host configures the device within\n"
+	"\t       this many milliseconds"
 );

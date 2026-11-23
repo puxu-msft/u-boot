@@ -313,6 +313,14 @@ static struct usb_request *fastboot_start_ep(struct usb_ep *ep)
 	return req;
 }
 
+/* 主机设过配置、端点已开（fastboot -t 的探测窗口据此判定主机在）；每次绑定时清零 */
+static bool fastboot_host_seen;
+
+bool fastboot_usb_host_seen(void)
+{
+	return fastboot_host_seen;
+}
+
 static int fastboot_set_alt(struct usb_function *f,
 			    unsigned interface, unsigned alt)
 {
@@ -358,6 +366,7 @@ static int fastboot_set_alt(struct usb_function *f,
 	ret = usb_ep_queue(f_fb->out_ep, f_fb->out_req, 0);
 	if (ret)
 		goto err;
+	fastboot_host_seen = true;
 
 	return 0;
 err:
@@ -381,6 +390,7 @@ static int fastboot_add(struct usb_configuration *c)
 		memset(f_fb, 0, sizeof(*f_fb));
 	}
 
+	fastboot_host_seen = false;
 	f_fb->usb_function.name = "f_fastboot";
 	f_fb->usb_function.bind = fastboot_bind;
 	f_fb->usb_function.unbind = fastboot_unbind;

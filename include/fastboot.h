@@ -106,6 +106,15 @@ void fastboot_okay(const char *reason, char *response);
 int fastboot_set_reboot_flag(enum fastboot_reboot_reason reason);
 
 /**
+ * fastboot_usb_host_seen() - USB fastboot 这次绑定以来主机是否设过配置
+ *
+ * fastboot -t 的探测窗口用它判定主机在不在
+ *
+ * Return: 主机设过配置、端点已开时为 true
+ */
+bool fastboot_usb_host_seen(void);
+
+/**
  * fastboot_clear_reboot_flag() - 撤销没用上的重启标记
  *
  * fastboot 命令在会话结束、而 fastboot_set_reboot_flag() 准备的那次复位没有发生时调用。
