@@ -276,6 +276,14 @@ void reset_misc(void)
 }
 #endif /* CONFIG_PSCI_RESET */
 
+/*
+ * PSCI SYSTEM_RESET 的 x1。架构上不用它；Amlogic 的 BL31 把它的低 4 位写成下次启动读到的重启原因，并且无条件写（覆盖此前经 SiP 0x82000049 设的值），所以要带原因复位只能放在这里。平台覆盖它，缺省 0
+ */
+__weak unsigned long psci_sys_reset_arg(void)
+{
+	return 0;
+}
+
 void psci_sys_reset(u32 type)
 {
 	bool reset2_supported;
@@ -292,7 +300,7 @@ void psci_sys_reset(u32 type)
 		 */
 		invoke_psci_fn(PSCI_FN_NATIVE(1_1, SYSTEM_RESET2), 0, 0, 0);
 	} else {
-		invoke_psci_fn(PSCI_0_2_FN_SYSTEM_RESET, 0, 0, 0);
+		invoke_psci_fn(PSCI_0_2_FN_SYSTEM_RESET, psci_sys_reset_arg(), 0, 0);
 	}
 }
 

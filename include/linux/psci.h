@@ -132,6 +132,8 @@ struct psci_plat_data {
 #ifdef CONFIG_ARM_PSCI_FW
 unsigned long invoke_psci_fn(unsigned long a0, unsigned long a1,
 			     unsigned long a2, unsigned long a3);
+/* psci_sys_reset_arg() - SYSTEM_RESET 的 x1（平台可覆盖，缺省 0；Amlogic BL31 把它当重启原因） */
+unsigned long psci_sys_reset_arg(void);
 void psci_sys_reset(u32 type);
 void psci_sys_poweroff(void);
 

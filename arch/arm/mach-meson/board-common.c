@@ -9,6 +9,7 @@
 #include <net.h>
 #include <asm/arch/boot.h>
 #include <env.h>
+#include <errno.h>
 #include <asm/cache.h>
 #include <asm/global_data.h>
 #include <asm/ptrace.h>
@@ -24,6 +25,7 @@
 #include <u-boot/crc.h>
 
 #include <asm/psci.h>
+#include <linux/psci.h>
 
 DECLARE_GLOBAL_DATA_PTR;
 
@@ -211,6 +213,34 @@ int board_late_init(void)
 
 	return meson_board_late_init();
 }
+
+#if CONFIG_IS_ENABLED(FASTBOOT) && !defined(CONFIG_XPL)
+/*
+ * fastboot reboot-bootloader/reboot-fastboot/reboot-recovery 的重启标记：不写 misc 的 BCB（厂商 u-boot 在线刷探测之前读它，chainload 期间写进去会改变下一次厂商路径的启动），改为 Amlogic 重启原因，随 PSCI SYSTEM_RESET 的 x1 交给 BL31（它无条件把 x1 写成原因，先经 SiP 0x82000049 设的会被覆盖）。
+ * 取值按厂商原因表：bootloader 与 fastboot 都用 fastboot（4）——厂商 BL33 见到 4 进它的 fastboot，见到 bootloader（7）照常启动；recovery 用 2。主线作 BL33 时由 m12.env 的冷启动入口分流（4 → fastboot 后进救援，2 暂按普通启动）；chainload 下复位后先跑厂商 BL33，由它按原因处理
+ */
+static unsigned long meson_reboot_reason;
+
+int fastboot_set_reboot_flag(enum fastboot_reboot_reason reason)
+{
+	switch (reason) {
+	case FASTBOOT_REBOOT_REASON_BOOTLOADER:
+	case FASTBOOT_REBOOT_REASON_FASTBOOTD:
+		meson_reboot_reason = REBOOT_REASON_FASTBOOT;
+		return 0;
+	case FASTBOOT_REBOOT_REASON_RECOVERY:
+		meson_reboot_reason = REBOOT_REASON_RECOVERY;
+		return 0;
+	default:
+		return -EINVAL;
+	}
+}
+
+unsigned long psci_sys_reset_arg(void)
+{
+	return meson_reboot_reason;
+}
+#endif
 
 #if defined(CONFIG_XPL) || !CONFIG_IS_ENABLED(SYSRESET)
 void reset_cpu(void)
