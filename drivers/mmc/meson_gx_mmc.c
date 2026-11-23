@@ -243,6 +243,14 @@ static int meson_legacy_mmc_send_cmd(struct mmc *mmc, struct mmc_cmd *cmd,
 
 	meson_mmc_read_response(mmc, cmd);
 
+	/*
+	 * 控制器 DMA 与 CPU 缓存不一致：传输前的作废只保证脏行不会在 DMA 期间被写回盖掉数据，传输期间 CPU 的预取仍可能把目的缓冲区的旧内容装回 D-cache；读完再作废一次，CPU 才读得到 DMA 写下的数据（与 Linux 对 DMA_FROM_DEVICE 的处理相同）。
+	 */
+	if (data && data->flags == MMC_DATA_READ)
+		invalidate_dcache_range((ulong)data->dest,
+					(ulong)data->dest +
+					data->blocks * data->blocksize);
+
 	if (data && data->flags == MMC_DATA_WRITE)
 		free(pdata->w_buf);
 
