@@ -56,11 +56,19 @@ static int amlogic_wdt_stop(struct udevice *dev)
 static int amlogic_wdt_start(struct udevice *dev, u64 time_ms, ulong flags)
 {
 	struct amlogic_wdt_priv *data = dev_get_priv(dev);
+	int ret;
 
+	/*
+	 * 先写超时、清计数，再置 EN：反过来时 EN 置位到写 TCNT 之间，计数按寄存器里遗留的旧 TCNT 比较（probe 只写 CTRL，不写 TCNT），旧值很小时可能立刻复位（计数与 TCNT 的比较时机未实测）。顺序与 Linux 驱动一致（probe 里先 set_timeout，start 只置 EN）。
+	 */
+	ret = amlogic_wdt_set_timeout(dev, time_ms);
+	if (ret)
+		return ret;
+	writel(0, data->reg_base + GXBB_WDT_RSET_REG);
 	writel(readl(data->reg_base + GXBB_WDT_CTRL_REG) | GXBB_WDT_CTRL_EN,
 	       data->reg_base + GXBB_WDT_CTRL_REG);
 
-	return amlogic_wdt_set_timeout(dev, time_ms);
+	return 0;
 }
 
 static int amlogic_wdt_reset(struct udevice *dev)
