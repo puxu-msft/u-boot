@@ -97,8 +97,11 @@ static int do_fastboot_usb(int argc, char *const argv[],
 
 	g_dnl_clear_detach();
 	ret = g_dnl_register("usb_dnl_fastboot");
-	if (ret)
-		return ret;
+	if (ret) {
+		/* 注册没成功就没有可注销的 gadget（同 ums、dfu）：只放回控制器 */
+		udc_device_put(udc);
+		return CMD_RET_FAILURE;
+	}
 
 	if (!g_dnl_board_usb_cable_connected()) {
 		puts("\rUSB cable not detected.\n" \
