@@ -84,13 +84,16 @@ relocate_done:
 2:	mrs	x0, sctlr_el2
 	b	0f
 1:	mrs	x0, sctlr_el1
-0:	tbz	w0, #2, 5f	/* skip flushing cache if disabled */
-	tbz	w0, #12, 4f	/* skip invalidating i-cache if disabled */
-	ic	iallu		/* i-cache invalidate all */
-	isb	sy
-4:	ldp	x0, x1, [sp, #16]
+0:	tbz	w0, #2, 4f	/* D-cache 关着：拷贝已直接落到内存，不用回写 */
+	ldp	x0, x1, [sp, #16]
 	bl	__asm_flush_dcache_range
 	bl     __asm_flush_l3_dcache
-5:	ldp	x29, x30, [sp],#32
+	/*
+	 * 先把重定位后的代码回写到内存，再作废 I-cache：顺序反过来时，作废与回写之间的预取可能把新地址处尚未回写的旧内容装进 I-cache（D-cache 与 I-cache 都开着时，例如被厂商 u-boot 的 go 直接 chainload）。I-cache 关着时作废也无害，所以不再看 I 位。
+	 */
+4:	ic	iallu		/* i-cache invalidate all */
+	dsb	sy
+	isb	sy
+	ldp	x29, x30, [sp],#32
 	ret
 ENDPROC(relocate_code)

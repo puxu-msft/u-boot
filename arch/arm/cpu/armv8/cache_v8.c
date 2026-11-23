@@ -950,7 +950,13 @@ void dcache_enable(void)
 	if (!gd->arch.tlb_fillptr)
 		setup_all_pgtables();
 
-	invalidate_dcache_all();
+	/*
+	 * D-cache 已经开着时（例如被厂商 u-boot 的 go 直接 chainload：它跳转前不关 MMU 与 cache），缓存里有本 u-boot 重定位前后写下、还没回写的数据（gd、重定位后的 FDT、BSS、栈），只作废不回写会把它们全部丢掉；这时改为回写并作废。D-cache 关着时缓存里没有本 u-boot 的数据，照上游只作废，丢掉可能残留的旧行。
+	 */
+	if (get_sctlr() & CR_C)
+		flush_dcache_all();
+	else
+		invalidate_dcache_all();
 	set_sctlr(get_sctlr() | CR_C);
 }
 
