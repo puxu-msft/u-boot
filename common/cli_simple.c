@@ -47,8 +47,10 @@ int cli_simple_process_macros(const char *input, char *output, int max_size)
 		if (state != 3) {
 			/* remove one level of escape characters */
 			if ((c == '\\') && (prev != '\\')) {
-				if (inputcnt-- == 0)
+				/* 结尾单独的反斜杠：输入已读完，丢掉它；不能把 inputcnt 减成 -1，那会被当成输出放不下（-ENOSPC） */
+				if (!inputcnt)
 					break;
+				inputcnt--;
 				prev = c;
 				c = *input++;
 			}
