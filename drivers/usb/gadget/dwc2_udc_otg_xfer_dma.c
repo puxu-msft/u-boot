@@ -125,6 +125,21 @@ static int setdma_rx(struct dwc2_ep *ep, struct dwc2_request *req)
 	return 0;
 }
 
+/*
+ * 一次 IN DMA 至多传多少字节：DIEPTSIZ 的包计数只有 10 位、传输长度 19 位（写进去的值被 FIELD_PREP 截掉高位，包计数回绕后
+ * 传输停在半途、请求永远完成不了），再取包长的整数倍，免得中途出短包让主机提前结束这次传输。全速下包长 64 字节，
+ * 上限是 1023 × 64 = 65472 字节，f_mass_storage 的 128 KiB 缓冲、Optimus 的 64 KiB 帧都会超；高速下 1023 × 512 也低于
+ * 传输长度的上限 524287。做法同 Linux dwc2 的 get_ep_limit()，余下的由 complete_tx() 接着发
+ */
+static u32 dwc2_tx_max(struct dwc2_ep *ep)
+{
+	u32 mps = ep->ep.maxpacket;
+	u32 by_size = FIELD_MAX(DXEPTSIZ_XFERSIZE_MASK) / mps * mps;
+	u32 by_pkt = FIELD_MAX(DXEPTSIZ_PKTCNT_MASK) * mps;
+
+	return min(by_size, by_pkt);
+}
+
 static int setdma_tx(struct dwc2_ep *ep, struct dwc2_request *req)
 {
 	u32 *buf;
@@ -136,6 +151,8 @@ static int setdma_tx(struct dwc2_ep *ep, struct dwc2_request *req)
 
 	if (ep_num == EP0_CON)
 		length = min(length, (u32)ep_maxpacket(ep));
+	else
+		length = min(length, dwc2_tx_max(ep));
 
 	ep->len = length;
 	ep->dma_buf = buf;
