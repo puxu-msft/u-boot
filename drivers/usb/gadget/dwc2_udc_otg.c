@@ -465,7 +465,7 @@ static void reconfig_usbd(struct dwc2_udc *dev)
 {
 	/* 2. Soft-reset OTG Core and then unreset again. */
 	int i;
-	u32 dflt_gusbcfg;
+	u32 dflt_gusbcfg, cur, phy_sel;
 	u32 rx_fifo_sz, tx_fifo_sz, np_tx_fifo_sz;
 	u32 max_hw_ep;
 	int pdata_hw_ep;
@@ -477,15 +477,17 @@ static void reconfig_usbd(struct dwc2_udc *dev)
 	dflt_gusbcfg =
 		0<<15		/* PHY Low Power Clock sel*/
 		|1<<14		/* Non-Periodic TxFIFO Rewind Enable*/
-		|0x5<<10	/* Turnaround time*/
 		|0<<9 | 0<<8	/* [0:HNP disable,1:HNP enable][ 0:SRP disable*/
 				/* 1:SRP enable] H1= 1,1*/
 		|0<<7		/* Ulpi DDR sel*/
 		|0<<6		/* 0: high speed utmi+, 1: full speed serial*/
 		|0<<4		/* 0: utmi+, 1:ulpi*/
 #ifdef CONFIG_USB_GADGET_DWC2_OTG_PHY_BUS_WIDTH_8
+		/* 周转时间按 PHY 宽度取：8 位 UTMI+（60 MHz）9 个 PHY 时钟，16 位（30 MHz）5 个（DWC2 databook；Linux dwc2 同样按宽度取） */
+		|0x9<<10	/* Turnaround time*/
 		|0<<3		/* phy i/f  0:8bit, 1:16bit*/
 #else
+		|0x5<<10	/* Turnaround time*/
 		|1<<3		/* phy i/f  0:8bit, 1:16bit*/
 #endif
 		|0x7<<0;	/* HS/FS Timeout**/
@@ -493,7 +495,22 @@ static void reconfig_usbd(struct dwc2_udc *dev)
 	if (dev->pdata->usb_gusbcfg)
 		dflt_gusbcfg = dev->pdata->usb_gusbcfg;
 
+	/*
+	 * 照 Linux dwc2 的顺序（core.c 的 dwc2_hs_phy_init() 与 gadget 的 dwc2_hsotg_core_init_disconnected()）：PHY 选择位（UTMI+/ULPI、PHY 宽度、FS 串行、ULPI DDR）与现值不同时才先只改这几位并软复位，让核心按新的 PHY 接口复位（这几位跨软复位保留，Linux dwc2_hs_phy_init() 的注释“preserved during soft reset”）；之后再写完整的 GUSBCFG。
+	 * 不能写完整值之后再软复位：软复位会把 PHY 选择位以外的字段（周转时间、TOUTCAL 等）恢复成复位值，M12（SM1）上写完再复位读回 0x1400、周转时间回到 5（2026-11-23 真机）；本机 PHY 选择位与复位值相同，这次读回看不出它们保不保留。
+	 * 写完立即读回核对周转时间，不符就告警
+	 */
+	phy_sel = GUSBCFG_ULPI_UTMI_SEL | GUSBCFG_PHYIF16 | GUSBCFG_PHYSEL | GUSBCFG_DDRSEL;
+	cur = readl(&reg->global_regs.gusbcfg);
+	if ((cur ^ dflt_gusbcfg) & phy_sel) {
+		writel((cur & ~phy_sel) | (dflt_gusbcfg & phy_sel), &reg->global_regs.gusbcfg);
+		dwc2_core_reset(reg);
+	}
 	writel(dflt_gusbcfg, &reg->global_regs.gusbcfg);
+	cur = readl(&reg->global_regs.gusbcfg);
+	if (FIELD_GET(GENMASK(13, 10), cur) != FIELD_GET(GENMASK(13, 10), dflt_gusbcfg))
+		printf("dwc2: GUSBCFG reads %#x after writing %#x: USB turnaround time not taken\n",
+		       cur, dflt_gusbcfg);
 
 	/* 3. Put the OTG device core in the disconnected state.*/
 	setbits_le32(&reg->device_regs.dctl, DCTL_SFTDISCON);
