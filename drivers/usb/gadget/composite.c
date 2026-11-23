@@ -1254,7 +1254,9 @@ unknown:
 		 */
 		switch (ctrl->bRequestType & USB_RECIP_MASK) {
 		case USB_RECIP_INTERFACE:
-			f = cdev->config->interface[intf];
+			/* wIndex 的低字节由主机给，至多 255，数组只有 MAX_CONFIG_INTERFACES 项（Linux 同一处有同样的检查） */
+			if (intf < MAX_CONFIG_INTERFACES)
+				f = cdev->config->interface[intf];
 			break;
 
 		case USB_RECIP_ENDPOINT:
