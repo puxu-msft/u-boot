@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: GPL-2.0+
 /*
- * fastboot 命令：重启标记（补丁 0508：Amlogic 的原因映射 asm/arch-meson/reboot.h，板上由 mach-meson 的 fastboot_set_reboot_flag() 使用；会话没有复位就结束时撤销标记的钩子）与 -t 探测窗口的参数（补丁 0509）
+ * fastboot 命令：重启标记（补丁 0508：Amlogic 的原因映射 asm/arch-meson/reboot.h，板上由 mach-meson 的 fastboot_set_reboot_flag() 使用；会话没有复位就结束时撤销标记的钩子）、-t 探测窗口的参数与按命令判主机在场（补丁 0509、0512）、fastboot_result
  */
 
 #include <command.h>
 #include <fastboot.h>
 #include <console.h>
+#include <env.h>
+#include <linux/kernel.h>
 #include <test/cmd.h>
 #include <test/ut.h>
 #include "../../arch/arm/include/asm/arch-meson/reboot.h"
@@ -63,8 +65,11 @@ static int cmd_test_fastboot_probe(struct unit_test_state *uts)
 
 	for (i = 0; i < ARRAY_SIZE(bad); i++) {
 		console_record_reset();
+		env_set("fastboot_result", NULL);
 		ut_asserteq(1, run_command(bad[i], 0));
 		ut_assert_nextline("fastboot - run as a fastboot usb or udp device");
+		ut_assertnonnull(env_get("fastboot_result"));
+		ut_asserteq_str("usage", env_get("fastboot_result"));
 	}
 	if (IS_ENABLED(CONFIG_NET_LEGACY)) {
 		console_record_reset();
@@ -73,10 +78,31 @@ static int cmd_test_fastboot_probe(struct unit_test_state *uts)
 	}
 	for (i = 0; i < ARRAY_SIZE(good); i++) {
 		console_record_reset();
+		env_set("fastboot_result", NULL);
 		ut_asserteq(1, run_command(good[i], 0));
 		ut_assert_skip_to_line("     do_fastboot_usb() Fastboot USB not enabled");
+		ut_assertnonnull(env_get("fastboot_result"));
+		ut_asserteq_str("error", env_get("fastboot_result"));
 	}
+	env_set("fastboot_result", NULL);
 
 	return 0;
 }
 CMD_TEST(cmd_test_fastboot_probe, UTF_CONSOLE);
+
+/* -t 判主机在场与空闲按收到的命令（设配置不算）：fastboot_init() 之后没有命令时是 ULONG_MAX，收到一条命令就从它算起 */
+static int cmd_test_fastboot_activity(struct unit_test_state *uts)
+{
+	char resp[FASTBOOT_RESPONSE_LEN], cmd[] = "getvar:version";
+
+	fastboot_init(NULL, 0);
+	ut_assert(fastboot_idle_ms() == ULONG_MAX);
+	fastboot_handle_command(cmd, resp);
+	ut_assert(!strncmp(resp, "OKAY", 4));
+	ut_assert(fastboot_idle_ms() < 1000);
+	fastboot_init(NULL, 0);
+	ut_assert(fastboot_idle_ms() == ULONG_MAX);
+
+	return 0;
+}
+CMD_TEST(cmd_test_fastboot_activity, 0);

@@ -131,15 +131,8 @@ static const struct {
 	},
 };
 
-/**
- * fastboot_handle_command - Handle fastboot command
- *
- * @cmd_string: Pointer to command string
- * @response: Pointer to fastboot response buffer
- *
- * Return: Executed command, or -1 if not recognized
- */
-int fastboot_handle_command(char *cmd_string, char *response)
+/* 按命令名查表分派，写好应答；返回执行的命令号，认不出时 -1 */
+static int fastboot_dispatch(char *cmd_string, char *response)
 {
 	int i;
 	char *cmd_parameter;
@@ -164,6 +157,26 @@ int fastboot_handle_command(char *cmd_string, char *response)
 	pr_err("command %s not recognized.\n", cmd_string);
 	fastboot_fail("unrecognized command", response);
 	return -1;
+}
+
+/**
+ * fastboot_handle_command - Handle fastboot command
+ *
+ * @cmd_string: Pointer to command string
+ * @response: Pointer to fastboot response buffer
+ *
+ * Return: Executed command, or -1 if not recognized
+ */
+int fastboot_handle_command(char *cmd_string, char *response)
+{
+	int ret;
+
+	/* 收到命令即主机在（fastboot -t）；flash 一类长命令结束时再记一次，空闲从命令结束算起 */
+	fastboot_note_activity();
+	ret = fastboot_dispatch(cmd_string, response);
+	fastboot_note_activity();
+
+	return ret;
 }
 
 void fastboot_multiresponse(int cmd, char *response)
@@ -288,6 +301,7 @@ void fastboot_data_download(const void *fastboot_data,
 #define BYTES_PER_DOT	0x20000
 	u32 pre_dot_num, now_dot_num;
 
+	fastboot_note_activity();
 	if (fastboot_data_len == 0 ||
 	    (fastboot_bytes_received + fastboot_data_len) >
 	    fastboot_bytes_expected) {

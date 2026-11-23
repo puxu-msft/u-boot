@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0+ */
 /*
- * fastboot 的重启标记 → Amlogic 重启原因（board-common.c 的 fastboot_set_reboot_flag() 用）。只是一张表，放在头文件里，sandbox 的单元测试直接核对它（test/cmd/fastboot_reboot.c）
+ * fastboot 的重启标记 → Amlogic 重启原因（board-common.c 的 fastboot_set_reboot_flag() 用）。只是一张表，放在头文件里，sandbox 的单元测试直接核对它（test/cmd/fastboot.c）
  */
 
 #ifndef __MESON_REBOOT_H__

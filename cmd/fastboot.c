@@ -8,6 +8,7 @@
  */
 #include <command.h>
 #include <console.h>
+#include <env.h>
 #include <g_dnl.h>
 #include <fastboot.h>
 #include <net.h>
@@ -60,6 +61,9 @@ static int do_fastboot_tcp(int argc, char *const argv[],
 }
 #endif
 
+/* 这次 fastboot 怎样结束，do_fastboot() 写进环境变量 fastboot_result：left、timeout、idle、error、usage */
+static const char *fb_result;
+
 static int do_fastboot_usb(int argc, char *const argv[],
 			   uintptr_t buf_addr, size_t buf_size, ulong probe_ms)
 {
@@ -105,15 +109,28 @@ static int do_fastboot_usb(int argc, char *const argv[],
 
 	start = get_timer(0);
 	if (probe_ms)
-		printf("fastboot: waiting %lu ms for a USB host\n", probe_ms);
+		printf("fastboot: waiting %lu ms for a fastboot command\n", probe_ms);
 	while (1) {
 		if (g_dnl_detach())
 			break;
-		if (probe_ms && !fastboot_usb_host_seen() &&
-		    get_timer(start) > probe_ms) {
-			printf("fastboot: no USB host within %lu ms\n", probe_ms);
-			ret = CMD_RET_FAILURE;
-			goto exit;
+		/*
+		 * -t：主机在 = 收到过 fastboot 命令（主机枚举时会自动设配置，不能当作有人在用）；窗口内一条命令都没有就失败返回，
+		 * 有过命令之后 probe_ms 内再没有命令或数据（主机拔线、走开）也离开，返回成功
+		 */
+		if (probe_ms) {
+			ulong idle = fastboot_idle_ms();
+
+			if (idle == ULONG_MAX && get_timer(start) > probe_ms) {
+				printf("fastboot: no fastboot command within %lu ms\n", probe_ms);
+				fb_result = "timeout";
+				ret = CMD_RET_FAILURE;
+				goto exit;
+			}
+			if (idle != ULONG_MAX && idle > probe_ms) {
+				printf("fastboot: no command for %lu ms, leaving\n", probe_ms);
+				fb_result = "idle";
+				break;
+			}
 		}
 		if (IS_ENABLED(CONFIG_CMD_FASTBOOT_ABORT_KEYED)) {
 			if (tstc()) {
@@ -129,6 +146,8 @@ static int do_fastboot_usb(int argc, char *const argv[],
 	}
 
 	ret = CMD_RET_SUCCESS;
+	if (!fb_result)
+		fb_result = "left";
 
 exit:
 	udc_device_put(udc);
@@ -138,8 +157,7 @@ exit:
 	return ret;
 }
 
-static int do_fastboot(struct cmd_tbl *cmdtp, int flag, int argc,
-		       char *const argv[])
+static int fastboot_cmd(int argc, char *const argv[])
 {
 	uintptr_t buf_addr = (uintptr_t)NULL;
 	size_t buf_size = 0;
@@ -209,8 +227,21 @@ NXTARG:
 		}
 		ret = do_fastboot_usb(argc, argv, buf_addr, buf_size, probe_ms);
 	}
+
+	return ret;
+}
+
+static int do_fastboot(struct cmd_tbl *cmdtp, int flag, int argc,
+		       char *const argv[])
+{
+	int ret;
+
+	fb_result = NULL;
+	ret = fastboot_cmd(argc, argv);
 	/* 会话结束而没有复位：reboot-bootloader 等记下的标记作废 */
 	fastboot_clear_reboot_flag();
+	env_set("fastboot_result", fb_result ? fb_result :
+		ret == CMD_RET_USAGE ? "usage" : ret ? "error" : "left");
 
 	return ret;
 }
@@ -223,6 +254,6 @@ U_BOOT_CMD(
 	__stringify(CONFIG_FASTBOOT_BUF_ADDR) ")\n"
 	"\tsize - size of buffer used during data transfers ("
 	__stringify(CONFIG_FASTBOOT_BUF_SIZE) ")\n"
-	"\tms   - (usb) give up if no host configures the device within\n"
-	"\t       this many milliseconds"
+	"\tms   - (usb) give up if no fastboot command arrives within this\n"
+	"\t       many milliseconds, and leave after as long without commands"
 );

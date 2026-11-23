@@ -15,7 +15,9 @@
 #include <env.h>
 #include <fastboot.h>
 #include <net.h>
+#include <time.h>
 #include <vsprintf.h>
+#include <linux/kernel.h>
 
 /**
  * fastboot_buf_addr - base address of the fastboot download buffer
@@ -235,6 +237,21 @@ void fastboot_set_progress_callback(void (*progress)(const char *msg))
 	fastboot_progress_callback = progress;
 }
 
+/* 最近一次收到命令或下载数据的时刻（get_timer）；fastboot_init() 清掉 */
+static bool fastboot_active;
+static ulong fastboot_active_at;
+
+void fastboot_note_activity(void)
+{
+	fastboot_active = true;
+	fastboot_active_at = get_timer(0);
+}
+
+ulong fastboot_idle_ms(void)
+{
+	return fastboot_active ? get_timer(fastboot_active_at) : ULONG_MAX;
+}
+
 /*
  * fastboot_init() - initialise new fastboot protocol session
  *
@@ -252,5 +269,5 @@ void fastboot_init(void *buf_addr, u32 buf_size)
 				       (void *)CONFIG_FASTBOOT_BUF_ADDR;
 	fastboot_buf_size = buf_size ? buf_size : CONFIG_FASTBOOT_BUF_SIZE;
 	fastboot_set_progress_callback(NULL);
-
+	fastboot_active = false;
 }

@@ -106,13 +106,20 @@ void fastboot_okay(const char *reason, char *response);
 int fastboot_set_reboot_flag(enum fastboot_reboot_reason reason);
 
 /**
- * fastboot_usb_host_seen() - USB fastboot 这次绑定以来主机是否设过配置
+ * fastboot_note_activity() - 记下“主机刚发来命令或下载数据”
  *
- * fastboot -t 的探测窗口用它判定主机在不在
- *
- * Return: 主机设过配置、端点已开时为 true
+ * fastboot_handle_command() 在命令开始与结束时、fastboot_data_download() 收到数据时调用
  */
-bool fastboot_usb_host_seen(void);
+void fastboot_note_activity(void);
+
+/**
+ * fastboot_idle_ms() - 距最近一次命令或下载数据的毫秒数
+ *
+ * fastboot -t 据此判定主机在不在（设配置不算：主机枚举时会自动设配置，不一定有人在用 fastboot）与会话是否空闲
+ *
+ * Return: 毫秒数；这次 fastboot_init() 以来还没有收到过命令时为 ULONG_MAX
+ */
+ulong fastboot_idle_ms(void);
 
 /**
  * fastboot_clear_reboot_flag() - 撤销没用上的重启标记
