@@ -307,6 +307,35 @@ static int do_mem_cmp(struct cmd_tbl *cmdtp, int flag, int argc,
 	return rcode;
 }
 
+/*
+ * cp.b/.w/.l/.q 按给定宽度逐个读写（volatile 的整宽读写，与 md 按宽度读一样；不用 readl 一类是因为 sandbox 的 readl 在没开 memio 时读出 0）：寄存器一类地址要求整宽访问，而通用 memmove/memcpy（没开 USE_ARCH_MEMCPY 时 lib/string.c）对不足一个 long 的部分逐字节拷，cp.l <寄存器> <内存> 1 就成了 4 次单字节读。区间重叠且目的在后时从尾部往前，与 memmove 的结果相同
+ */
+static void mem_cp_width(void *dst, const void *src, ulong count, int size)
+{
+	bool back = dst > src && (char *)dst < (char *)src + count * size;
+	ulong n, i;
+
+	for (n = 0; n < count; n++) {
+		i = back ? count - 1 - n : n;
+		switch (size) {
+		case 1:
+			((volatile u8 *)dst)[i] = ((const volatile u8 *)src)[i];
+			break;
+		case 2:
+			((volatile u16 *)dst)[i] = ((const volatile u16 *)src)[i];
+			break;
+		case 4:
+			((volatile u32 *)dst)[i] = ((const volatile u32 *)src)[i];
+			break;
+#if MEM_SUPPORT_64BIT_DATA
+		case 8:
+			((volatile u64 *)dst)[i] = ((const volatile u64 *)src)[i];
+			break;
+#endif
+		}
+	}
+}
+
 static int do_mem_cp(struct cmd_tbl *cmdtp, int flag, int argc,
 		     char *const argv[])
 {
@@ -359,7 +388,7 @@ static int do_mem_cp(struct cmd_tbl *cmdtp, int flag, int argc,
 	}
 #endif
 
-	memmove(dst, src, count * size);
+	mem_cp_width(dst, src, count, size);
 
 	unmap_sysmem(src);
 	unmap_sysmem(dst);
