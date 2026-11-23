@@ -150,6 +150,7 @@
 enum meson_soc_id {
 	MESON_SOC_A1,
 	MESON_SOC_G12A,
+	MESON_SOC_SM1,
 };
 
 struct phy_meson_g12a_usb2_priv {
@@ -163,6 +164,55 @@ struct phy_meson_g12a_usb2_priv {
 #endif
 	int soc_id;
 };
+
+/* Tuning Disconnect Threshold */
+static void phy_meson_g12a_usb2_write_r3(struct phy_meson_g12a_usb2_priv *priv)
+{
+	regmap_write(priv->regmap, PHY_CTRL_R3,
+		FIELD_PREP(PHY_CTRL_R3_SQUELCH_REF, 0) |
+		FIELD_PREP(PHY_CTRL_R3_HSDIC_REF, 1) |
+		FIELD_PREP(PHY_CTRL_R3_DISC_THRESH, 3));
+}
+
+/* PHY Tuning */
+static void phy_meson_g12a_usb2_write_r20(struct phy_meson_g12a_usb2_priv *priv)
+{
+	regmap_write(priv->regmap, PHY_CTRL_R20,
+		FIELD_PREP(PHY_CTRL_R20_USB2_OTG_VBUS_TRIM_2_0, 4) |
+		PHY_CTRL_R20_USB2_OTG_VBUSDET_EN |
+		FIELD_PREP(PHY_CTRL_R20_USB2_DMON_SEL_3_0, 15) |
+		PHY_CTRL_R20_USB2_EDGE_DRV_EN |
+		FIELD_PREP(PHY_CTRL_R20_USB2_EDGE_DRV_TRIM_1_0, 3) |
+		FIELD_PREP(PHY_CTRL_R20_USB2_BGR_ADJ_4_0, 0) |
+		FIELD_PREP(PHY_CTRL_R20_USB2_BGR_VREF_4_0, 0) |
+		FIELD_PREP(PHY_CTRL_R20_USB2_BGR_DBG_1_0, 0));
+}
+
+/*
+ * SM1 锁相环之后的调校，取值与顺序照 Amlogic 厂商 BL33 的 SM1 分支（R3 → R20 → R21 → R4 → R13，不写 R14）：R21 与 A1 相同；
+ * R4 不强写校准码、不开测试旁路，而是把 R2 低 12 位（PHY 复位后硬件自校准的结果）并进 R4，保留硬件校准。按 G12A 的参数初始化时
+ * M12（SM1）的 OTG 口只能以全速枚举，换成这组参数后高速枚举。
+ */
+static void phy_meson_sm1_usb2_tune(struct phy_meson_g12a_usb2_priv *priv)
+{
+	u32 r2, r4;
+
+	phy_meson_g12a_usb2_write_r3(priv);
+	phy_meson_g12a_usb2_write_r20(priv);
+
+	regmap_write(priv->regmap, PHY_CTRL_R21,
+		PHY_CTRL_R21_USB2_CAL_ACK_EN |
+		PHY_CTRL_R21_USB2_TX_STRG_PD |
+		FIELD_PREP(PHY_CTRL_R21_USB2_OTG_ACA_TRIM_1_0, 2));
+
+	regmap_read(priv->regmap, PHY_CTRL_R2, &r2);
+	regmap_read(priv->regmap, PHY_CTRL_R4, &r4);
+	regmap_write(priv->regmap, PHY_CTRL_R4, (r2 & GENMASK(11, 0)) | r4);
+
+	regmap_write(priv->regmap, PHY_CTRL_R13,
+		PHY_CTRL_R13_UPDATE_PMA_SIGNALS |
+		FIELD_PREP(PHY_CTRL_R13_MIN_COUNT_FOR_SYNC_DET, 7));
+}
 
 static int phy_meson_g12a_usb2_init(struct phy *phy)
 {
@@ -187,8 +237,9 @@ static int phy_meson_g12a_usb2_init(struct phy *phy)
 
 	udelay(RESET_COMPLETE_TIME);
 
-	/* usb2_otg_aca_en == 0 */
-	regmap_update_bits(priv->regmap, PHY_CTRL_R21, BIT(2), 0);
+	/* usb2_otg_aca_en == 0；SM1 在调校时整写 R21 */
+	if (priv->soc_id != MESON_SOC_SM1)
+		regmap_update_bits(priv->regmap, PHY_CTRL_R21, BIT(2), 0);
 
 	/* PLL Setup : 24MHz * 20 / 1 = 480MHz */
 	regmap_write(priv->regmap, PHY_CTRL_R16,
@@ -219,7 +270,7 @@ static int phy_meson_g12a_usb2_init(struct phy *phy)
 		FIELD_PREP(PHY_CTRL_R18_MPLL_ADJ_LDO, 1) |
 		PHY_CTRL_R18_MPLL_ACG_RANGE;
 
-	if (priv->soc_id == MESON_SOC_A1)
+	if (priv->soc_id == MESON_SOC_A1 || priv->soc_id == MESON_SOC_SM1)
 		value |= PHY_CTRL_R18_MPLL_DCO_CLK_SEL;
 
 	regmap_write(priv->regmap, PHY_CTRL_R18, value);
@@ -235,16 +286,12 @@ static int phy_meson_g12a_usb2_init(struct phy *phy)
 		PHY_CTRL_R16_MPLL_FAST_LOCK |
 		PHY_CTRL_R16_MPLL_EN);
 
-	/* PHY Tuning */
-	regmap_write(priv->regmap, PHY_CTRL_R20,
-		FIELD_PREP(PHY_CTRL_R20_USB2_OTG_VBUS_TRIM_2_0, 4) |
-		PHY_CTRL_R20_USB2_OTG_VBUSDET_EN |
-		FIELD_PREP(PHY_CTRL_R20_USB2_DMON_SEL_3_0, 15) |
-		PHY_CTRL_R20_USB2_EDGE_DRV_EN |
-		FIELD_PREP(PHY_CTRL_R20_USB2_EDGE_DRV_TRIM_1_0, 3) |
-		FIELD_PREP(PHY_CTRL_R20_USB2_BGR_ADJ_4_0, 0) |
-		FIELD_PREP(PHY_CTRL_R20_USB2_BGR_VREF_4_0, 0) |
-		FIELD_PREP(PHY_CTRL_R20_USB2_BGR_DBG_1_0, 0));
+	if (priv->soc_id == MESON_SOC_SM1) {
+		phy_meson_sm1_usb2_tune(priv);
+		return 0;
+	}
+
+	phy_meson_g12a_usb2_write_r20(priv);
 
 	if (priv->soc_id == MESON_SOC_G12A)
 		regmap_write(priv->regmap, PHY_CTRL_R4,
@@ -260,11 +307,7 @@ static int phy_meson_g12a_usb2_init(struct phy *phy)
 			PHY_CTRL_R21_USB2_TX_STRG_PD |
 			FIELD_PREP(PHY_CTRL_R21_USB2_OTG_ACA_TRIM_1_0, 2));
 
-	/* Tuning Disconnect Threshold */
-	regmap_write(priv->regmap, PHY_CTRL_R3,
-		FIELD_PREP(PHY_CTRL_R3_SQUELCH_REF, 0) |
-		FIELD_PREP(PHY_CTRL_R3_HSDIC_REF, 1) |
-		FIELD_PREP(PHY_CTRL_R3_DISC_THRESH, 3));
+	phy_meson_g12a_usb2_write_r3(priv);
 
 	/* Analog Settings */
 	if (priv->soc_id == MESON_SOC_G12A) {
@@ -308,6 +351,9 @@ int meson_g12a_usb2_phy_probe(struct udevice *dev)
 	int ret;
 
 	priv->soc_id = (enum meson_soc_id)dev_get_driver_data(dev);
+	/* SM1 的 USB2 PHY 沿用 amlogic,g12a-usb2-phy 的 compatible，按根节点区分 */
+	if (priv->soc_id == MESON_SOC_G12A && of_machine_is_compatible("amlogic,sm1"))
+		priv->soc_id = MESON_SOC_SM1;
 
 	ret = regmap_init_mem(dev_ofnode(dev), &priv->regmap);
 	if (ret)
