@@ -1419,13 +1419,16 @@ CMD_TEST(cmd_test_redline_ums_ro, UTF_CONSOLE);
 static int cmd_test_redline_fastboot_relaxed(struct unit_test_state *uts)
 {
 	char resp[FASTBOOT_RESPONSE_LEN];
+	u8 mbr[BLKSZ];
 	struct rl_env e;
 	u8 *buf;
 
 	if (!IS_ENABLED(CONFIG_CMD_REDLINE) || !CONFIG_IS_ENABLED(FASTBOOT_FLASH_MMC) ||
-	    strcmp(CONFIG_REDLINE_FASTBOOT_RELAXED, "mmcsda2"))
+	    !IS_ENABLED(CONFIG_CMD_GPT) ||
+	    strcmp(CONFIG_REDLINE_FASTBOOT_RELAXED, "mmcsda2 gpt"))
 		return -EAGAIN;
 	ut_assertok(rl_setup(uts, &e));
+	ut_asserteq(1, blk_dread(e.mmc0, 0, 1, mbr));
 	buf = memalign(ARCH_DMA_MINALIGN, SZ_256K);
 	ut_assertnonnull(buf);
 	fastboot_init(buf, SZ_256K);
@@ -1454,6 +1457,37 @@ static int cmd_test_redline_fastboot_relaxed(struct unit_test_state *uts)
 	ut_assertok(env_set("fastboot_raw_partition_mmcsda2", "0x100 0x100"));
 	ut_assertok(fb_held(uts, "flash:mmcsda2"));
 	env_set("fastboot_raw_partition_mmcsda2", NULL);
+	run_command("redline cancel", 0);
+
+	/* 块设备停在别的硬件分区上（前面的写留下的）：fastboot 会写进那个硬件分区，照旧拦下 */
+	ut_asserteq(1, blk_dwrite(e.mmc0, 0, 1, mbr));
+	part_init(e.mmc0);
+	e.mmc0->hwpart = 1;
+	ut_assertok(fb_held(uts, "flash:mmcsda2"));
+	e.mmc0->hwpart = 0;
+	run_command("redline cancel", 0);
+
+	/*
+	 * GPT 上的分区名：mmcsda 只是名单里 mmcsda2 的前缀，按整词比不在名单里；gpt 在名单里，但 fastboot 先把它当“写分区表”的特殊目标，
+	 * 写的不是同名分区，照旧拦下
+	 */
+	ut_asserteq(1, run_command("gpt write mmc 0 \"name=mmcsda,start=64KiB,size=64KiB;name=gpt,start=128KiB,size=64KiB\"", 0));
+	ut_assertok(yes());
+	/* part_init() 先按已知类型复核，保护性 MBR 照样过 DOS 的检查：清掉类型重新识别 */
+	e.mmc0->part_type = PART_TYPE_UNKNOWN;
+	part_init(e.mmc0);
+	ut_asserteq(PART_TYPE_EFI, e.mmc0->part_type);
+	ut_assertok(fb_held(uts, "flash:mmcsda"));
+	run_command("redline cancel", 0);
+	ut_assertok(fb_held(uts, "flash:gpt"));
+	run_command("redline cancel", 0);
+	/* 清掉主、备两份 GPT，恢复 rl_setup 的 DOS 表 */
+	memset(buf, 0, 34 * BLKSZ);
+	ut_asserteq(34, blk_dwrite(e.mmc0, 0, 34, buf));
+	ut_asserteq(33, blk_dwrite(e.mmc0, e.mmc0->lba - 33, 33, buf));
+	ut_asserteq(1, blk_dwrite(e.mmc0, 0, 1, mbr));
+	part_init(e.mmc0);
+	ut_asserteq(PART_TYPE_DOS, e.mmc0->part_type);
 	free(buf);
 	rl_teardown(&e);
 

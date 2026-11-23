@@ -1150,8 +1150,9 @@ int redline_gate(struct cmd_tbl *cmdtp, int argc, char *const argv[])
 /*
  * fastboot flash/erase 的清单：目标按 fastboot 自己的解析（fastboot_mmc_get_part_info()：分区名、fastboot_partition_alias_<名> 别名、fastboot_raw_partition_<名> 原始区段），所以与 fastboot 实际写的对象一致；分区名随盘上的分区表（MPT）动态取。
  * flash 的源数据是 sparse 镜像时照 write_sparse_image() 逐 chunk 走出展开后的盘上范围（RAW、FILL 写，DONT_CARE 只跳过，范围从分区起点量到最后一个 chunk 之后），否则是下载长度取整到块。boot0/boot1、整个 user 区、gpt、mbr、zimage 这类特殊目标按 fastboot 的写法列出整块硬件分区或分区表所在的块。
+ * 返回值：目标是 fastboot 按名字（分区名、别名或原始区段）解析到的区段时为 true；特殊目标与解析不出的为 false，放宽档只看前者
  */
-static void rl_fastboot_plan(struct rl_text *t, bool erase, const char *part,
+static bool rl_fastboot_plan(struct rl_text *t, bool erase, const char *part,
 			     ulong addr, u32 size)
 {
 	char resp[FASTBOOT_RESPONSE_LEN];
@@ -1169,7 +1170,7 @@ static void rl_fastboot_plan(struct rl_text *t, bool erase, const char *part,
 		rl_puts(t, "  note    : fastboot flashes no MMC here: the target is not resolved\n");
 		if (!erase)
 			rl_source(t, addr, size);
-		return;
+		return false;
 	}
 #ifdef CONFIG_FASTBOOT_MMC_BOOT_SUPPORT
 	if (!strcmp(part, CONFIG_FASTBOOT_MMC_BOOT1_NAME))
@@ -1201,20 +1202,20 @@ static void rl_fastboot_plan(struct rl_text *t, bool erase, const char *part,
 			if (!blk_get_desc(UCLASS_MMC, CONFIG_FASTBOOT_FLASH_MMC_DEV, &desc))
 				rl_overlaps(t, desc, 0, 0x22, 0x22);
 		}
-		return;
+		return false;
 	}
 	if (fastboot_mmc_get_part_info(part, &desc, &info, resp) < 0) {
 		rl_printf(t, "  target  : '%s' is not a partition, alias or raw partition fastboot knows: fastboot will fail\n",
 			  part);
 		if (!erase)
 			rl_source(t, addr, size);
-		return;
+		return false;
 	}
 	rl_printf(t, "  target  : '%s', blocks 0x" LBAF "..0x" LBAF " (0x" LBAF " blocks)\n",
 		  part, info.start, info.start + info.size, info.size);
 	if (erase) {
 		rl_range(t, desc, info.start, info.size);
-		return;
+		return true;
 	}
 	sparse = false;
 	if (!rl_unreadable(addr, sizeof(sparse_header_t))) {
@@ -1226,13 +1227,15 @@ static void rl_fastboot_plan(struct rl_text *t, bool erase, const char *part,
 		rl_puts(t, "  image   : Android sparse; the range below is the expanded one (RAW and FILL chunks are written, DONT_CARE is skipped)\n");
 		rl_swrite_to(t, desc, addr, info.start, info.start + info.size,
 			     "fastboot flash");
-		return;
+		return true;
 	}
 	rl_source(t, addr, size);
 	if (DIV_ROUND_UP(size, info.blksz) > info.size)
 		rl_puts(t, "  note    : the image is larger than the partition: fastboot refuses before writing anything\n");
 	rl_range(t, desc, info.start,
 		 min_t(lbaint_t, DIV_ROUND_UP(size, info.blksz), info.size));
+
+	return true;
 }
 
 static void rl_fastboot_hold(bool erase, const char *part, ulong addr,
@@ -1261,9 +1264,10 @@ static void rl_fastboot_hold(bool erase, const char *part, ulong addr,
 
 /*
  * 设备声明写坏后不需要物理救援的分区（CONFIG_REDLINE_FASTBOOT_RELAXED，M12 由 check-image.py 核对它等于 usbdl-mux 设备策略里无拆挡与可控挡（策略文件里的 volatile 与 software）的 write_part 分区）：
- * 名字在表里、fastboot 解析到的正是分区表里的同名分区（不是别名、不是原始区段）、清单没有附注（不超出分区、sparse 完整可解析）才放行
+ * 名字在表里（按整词比）、不是 gpt/mbr/zimage/boot0/user 这类特殊目标（fastboot 先认它们，写的不是同名分区）、fastboot 解析到的正是分区表里的同名分区（不是别名、不是原始区段）、块设备在 user 区（hwpart 0，前面的写可能把它留在 boot0/boot1 上）、清单没有附注（不超出分区、sparse 完整可解析）才放行
  */
-static bool rl_fastboot_relaxed(const char *part, const struct rl_text *t)
+static bool rl_fastboot_relaxed(const char *part, bool named,
+				const struct rl_text *t)
 {
 	const char *list = CONFIG_REDLINE_FASTBOOT_RELAXED, *p;
 	char resp[FASTBOOT_RESPONSE_LEN];
@@ -1271,7 +1275,7 @@ static bool rl_fastboot_relaxed(const char *part, const struct rl_text *t)
 	struct blk_desc *desc;
 	size_t n = strlen(part);
 
-	if (!CONFIG_IS_ENABLED(FASTBOOT_FLASH_MMC) || !n || t->oom ||
+	if (!CONFIG_IS_ENABLED(FASTBOOT_FLASH_MMC) || !named || !n || t->oom ||
 	    strstr(t->buf, "  note    :"))
 		return false;
 	for (p = list; (p = strstr(p, part)); p += n)
@@ -1289,9 +1293,10 @@ bool redline_hold_fastboot(bool erase, const char *part, ulong addr, u32 size,
 				      u32 size))
 {
 	struct rl_text t = {};
+	bool named;
 
-	rl_fastboot_plan(&t, erase, part, addr, size);
-	if (rl_fastboot_relaxed(part, &t)) {
+	named = rl_fastboot_plan(&t, erase, part, addr, size);
+	if (rl_fastboot_relaxed(part, named, &t)) {
 		free(t.buf);
 		printf("redline: fastboot %s %s: relaxed partition (REDLINE_FASTBOOT_RELAXED), not held\n",
 		       erase ? "erase" : "flash", part);
