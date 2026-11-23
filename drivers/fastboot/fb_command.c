@@ -377,6 +377,20 @@ static int __maybe_unused redline_run(bool erase, const char *part, ulong addr,
 	return strncmp(response, "OKAY", 4) ? -EIO : 0;
 }
 
+/*
+ * fastboot getvar is-logical:<名> 先查环境变量 fastboot.is-logical:<名>（fb_getvar.c 对任意变量都先查 fastboot.<变量>）；同一张表也管 flash/erase：标为逻辑分区（值为 yes）的名字由 fastbootd 处理，bootloader 一侧不按物理分区去写，回 FAIL
+ */
+static bool fb_is_logical(const char *part)
+{
+	char var[FASTBOOT_RESPONSE_LEN];
+	const char *s;
+
+	snprintf(var, sizeof(var), "fastboot.is-logical:%s", part);
+	s = env_get(var);
+
+	return s && !strcmp(s, "yes");
+}
+
 /**
  * flash() - write the downloaded image to the indicated partition.
  *
@@ -390,6 +404,10 @@ static int __maybe_unused redline_run(bool erase, const char *part, ulong addr,
  */
 static void __maybe_unused flash(char *cmd_parameter, char *response)
 {
+	if (fb_is_logical(cmd_parameter)) {
+		fastboot_fail("logical partition: flash it from fastbootd", response);
+		return;
+	}
 	if (IS_ENABLED(CONFIG_CMD_REDLINE)) {
 		redline_input_next();
 		if (redline_hold_fastboot(false, cmd_parameter,
@@ -416,6 +434,10 @@ static void __maybe_unused flash(char *cmd_parameter, char *response)
  */
 static void __maybe_unused erase(char *cmd_parameter, char *response)
 {
+	if (fb_is_logical(cmd_parameter)) {
+		fastboot_fail("logical partition: erase it from fastbootd", response);
+		return;
+	}
 	if (IS_ENABLED(CONFIG_CMD_REDLINE)) {
 		redline_input_next();
 		if (redline_hold_fastboot(true, cmd_parameter, 0, 0,

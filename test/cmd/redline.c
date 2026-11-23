@@ -1461,3 +1461,39 @@ static int cmd_test_redline_fastboot_relaxed(struct unit_test_state *uts)
 }
 CMD_TEST(cmd_test_redline_fastboot_relaxed, UTF_CONSOLE);
 #endif
+
+/* fastboot.is-logical:<名>（补丁 0505）：标为逻辑分区的名字 flash/erase 一律回 FAIL，不进红线清单、不写；表里没有的照常走红线门 */
+static int cmd_test_redline_fastboot_logical(struct unit_test_state *uts)
+{
+	char resp[FASTBOOT_RESPONSE_LEN];
+	struct rl_env e;
+	u8 *buf;
+
+	if (!IS_ENABLED(CONFIG_CMD_REDLINE) || !CONFIG_IS_ENABLED(FASTBOOT_FLASH_MMC))
+		return -EAGAIN;
+	ut_assertok(rl_setup(uts, &e));
+	buf = memalign(ARCH_DMA_MINALIGN, SZ_64K);
+	ut_assertnonnull(buf);
+	fastboot_init(buf, SZ_64K);
+	ut_assertok(env_set("fastboot_raw_partition_rlfb", "0x40 0x20"));
+	ut_assertok(env_set("fastboot.is-logical:rlfb", "yes"));
+	ut_assertok(fb_download(uts, e.a, BLKSZ));
+	console_record_reset();
+	fastboot_handle_command((char[]){"flash:rlfb"}, resp);
+	ut_asserteq_str("FAILlogical partition: flash it from fastbootd", resp);
+	fastboot_handle_command((char[]){"erase:rlfb"}, resp);
+	ut_asserteq_str("FAILlogical partition: erase it from fastbootd", resp);
+	ut_assert_console_end();
+	fastboot_handle_command((char[]){"getvar:is-logical:rlfb"}, resp);
+	ut_asserteq_str("OKAYyes", resp);
+	ut_assertok(blk_is(uts, e.mmc0, 0x40, 0x11));
+	ut_assertok(env_set("fastboot.is-logical:rlfb", "no"));
+	ut_assertok(fb_held(uts, "flash:rlfb"));
+	env_set("fastboot.is-logical:rlfb", NULL);
+	env_set("fastboot_raw_partition_rlfb", NULL);
+	free(buf);
+	rl_teardown(&e);
+
+	return 0;
+}
+CMD_TEST(cmd_test_redline_fastboot_logical, UTF_CONSOLE);
