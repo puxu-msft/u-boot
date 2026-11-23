@@ -55,6 +55,7 @@ struct optimus {
 	bool to_store;			/* 目标是 store 分区，否则是内存 */
 	ulong addr;			/* 内存：起点 */
 	struct blk_desc *desc;		/* store：块设备 */
+	int hwpart;			/* store：声明时块设备所在的硬件分区，之后每帧都要还在它上面 */
 	u64 base;			/* store：分区起点的字节偏移 */
 	u64 total, done;		/* 声明的字节数、已确认的字节数 */
 	bool failed;			/* 写存储出过错（download get_status 报失败，之后的帧都拒收） */
@@ -62,7 +63,7 @@ struct optimus {
 	/* 当前 0x32 帧 */
 	u32 frame_len, frame_sum;
 	u16 frame_alg, ack_len;
-	const char *frame_err;		/* 控制头就不合格时的原因：照收数据，应答报错 */
+	const char *frame_err;		/* 控制头就不合格（或收数据前又有了新的声明）时的原因：照收数据，应答报错 */
 
 	bool leave;			/* 命令请求离开线刷态（optimus leave） */
 	char *deferred;			/* 离开 USB 之后要执行的命令（redline yes 确认的动作要占用 UDC 时），由传输层取走执行 */

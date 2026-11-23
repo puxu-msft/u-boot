@@ -140,11 +140,12 @@ static int optimus_xfer_cmd(struct optimus *o, int argc, char *const argv[],
 		*why = "usage: download|upload <mem|store> <address|partition> normal <size>";
 		return -EINVAL;
 	}
-	/* 新的声明取代上一次的，不论是否合格 */
+	/* 新的声明取代上一次的，不论是否合格；控制头已收、数据还没到的那一帧是按旧声明核过的，作废 */
 	o->xfer = OPTIMUS_XFER_NONE;
 	o->failed = false;
 	o->done = 0;
 	o->total = 0;
+	o->frame_err = "a new transfer was declared before the frame data arrived";
 	if (strcmp(argv[3], "normal")) {
 		*why = "only image type normal is supported";
 		return -EOPNOTSUPP;
@@ -178,6 +179,7 @@ static int optimus_xfer_cmd(struct optimus *o, int argc, char *const argv[],
 		}
 		o->to_store = true;
 		o->desc = desc;
+		o->hwpart = desc->hwpart;
 		o->base = (u64)info.start * info.blksz;
 	} else {
 		*why = "unsupported media";
@@ -405,6 +407,12 @@ void optimus_bulk_out_done(struct optimus *o, unsigned int len)
 		return;
 	}
 	if (o->to_store) {
+		/* 帧之间有命令切了硬件分区（mmc dev <n> <part>）：照分区偏移写会落到别的硬件分区上 */
+		if (o->desc->hwpart != o->hwpart) {
+			o->failed = true;
+			optimus_media_reply(o, "the eMMC hardware partition changed during the download");
+			return;
+		}
 		if (aml_store_write(o->desc, o->base + o->done, len, o->frame)) {
 			o->failed = true;
 			optimus_media_reply(o, "storage write failed");

@@ -2,16 +2,26 @@
 /*
  * optimus：进入 Amlogic USB 线刷态（协议见 drivers/optimus，USB 设备函数见 drivers/usb/gadget/f_optimus.c）
  *
- * optimus [-t <毫秒>] <USB 控制器>  进入线刷态，直到主机经命令请求离开（optimus leave）、Ctrl-C 或出错；-t 是探测窗口，窗口内主机没有设配置就返回失败（冷启动时“主机在就进线刷态，否则继续启动”）
+ * optimus [-t <毫秒>] <USB 控制器>  进入线刷态，直到主机经命令请求离开（optimus leave）、Ctrl-C 或出错；-t 是探测窗口，窗口内主机没有设配置就返回失败（冷启动时“主机在就进线刷态，否则继续启动”）。毫秒数按 simple_strtoul(…, 10) 解析：十进制，照 U-Boot 惯例也认 0x 前缀；0 与带杂字符的值是用法错误。
+ * 结束时环境变量 optimus_result 记下结果：left（会话结束：主机请求离开或 Ctrl-C）、timeout（探测窗口内没有主机）、error（UDC 或 gadget 出错）、usage（参数不对）
  * optimus leave                       只在线刷态执行的命令里有效：请线刷态在这条命令的应答送出后退出；不在线刷态时返回失败
  * 离开之后做什么由调用方的脚本决定（m12.env 的救援循环按 m12_rescue_next 分派）。
  */
 
 #include <command.h>
+#include <env.h>
 #include <errno.h>
 #include <optimus.h>
 #include <vsprintf.h>
 #include <linux/string.h>
+
+/* 结果写进 optimus_result，供脚本把“没有主机”与出错分开报 */
+static int optimus_done(const char *result, int ret)
+{
+	env_set("optimus_result", result);
+
+	return ret;
+}
 
 static int do_optimus(struct cmd_tbl *cmdtp, int flag, int argc,
 		      char *const argv[])
@@ -30,26 +40,26 @@ static int do_optimus(struct cmd_tbl *cmdtp, int flag, int argc,
 	if (argc == 4 && !strcmp(argv[1], "-t")) {
 		probe = simple_strtoul(argv[2], &end, 10);
 		if (*end || !probe)
-			return CMD_RET_USAGE;
+			return optimus_done("usage", CMD_RET_USAGE);
 		argc -= 2;
 		argv += 2;
 	}
 	if (argc != 2)
-		return CMD_RET_USAGE;
+		return optimus_done("usage", CMD_RET_USAGE);
 	ctrl = simple_strtoul(argv[1], &end, 10);
 	if (*end)
-		return CMD_RET_USAGE;
+		return optimus_done("usage", CMD_RET_USAGE);
 	ret = f_optimus_run(ctrl, probe);
 	if (ret == -ETIMEDOUT) {
 		printf("optimus: no USB host within %lu ms\n", probe);
-		return CMD_RET_FAILURE;
+		return optimus_done("timeout", CMD_RET_FAILURE);
 	}
 	if (ret) {
 		printf("optimus: USB burning mode failed (%d)\n", ret);
-		return CMD_RET_FAILURE;
+		return optimus_done("error", CMD_RET_FAILURE);
 	}
 
-	return CMD_RET_SUCCESS;
+	return optimus_done("left", CMD_RET_SUCCESS);
 }
 
 U_BOOT_LONGHELP(optimus,

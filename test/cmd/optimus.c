@@ -349,6 +349,20 @@ static int cmd_test_optimus_download_mem(struct unit_test_state *uts)
 	ut_asserteq_str("failed:no download declared", media(f, h, 16, data, 0x80));
 	ut_asserteq_str("failed:download not complete", bulkcmd(f, "download get_status"));
 
+	/* 控制头按旧声明核过、数据还没到时又来了新的声明（换了地址）：这一帧作废，不写到新地址 */
+	ut_asserteq_str("success", bulkcmd(f, "download mem 0x8000000 normal 0x100"));
+	head(h, 0x100, addsum(data, 0x100), 0xef, 0x200);
+	f->out_count = 0;
+	ut_asserteq(32, ctrl_out(f, OPTIMUS_REQ_WRITE_MEDIA, 0xffff, h, 32));
+	ut_asserteq(1, f->out_count);
+	ut_asserteq_str("success", bulkcmd(f, "download mem 0x8010000 normal 0x100"));
+	memset(mem + 0x10000, 0xee, 0x100);
+	memcpy(f->o.frame, data, 0x100);
+	optimus_bulk_out_done(&f->o, 0x100);
+	ut_asserteq_str("failed:a new transfer was declared before the frame data arrived", (char *)f->in);
+	ut_asserteq(0xee, mem[0x10000]);
+	ut_asserteq(0, f->o.done);
+
 	unmap_sysmem(mem);
 	free(data);
 	fake_free(f);
@@ -406,6 +420,11 @@ static int cmd_test_optimus_mem_range(struct unit_test_state *uts)
 	ut_asserteq_str("success", bulkcmdf(f, "download mem 0x%llx normal 0x1000", (u64)rsv + 0x1000));
 	ut_assertok(lmb_free(rsv, 0x1000, LMB_NOOVERWRITE));
 	ut_asserteq_str("success", bulkcmdf(f, "download mem 0x%llx normal 0x10", (u64)rsv));
+	/* 固件保留、不映射的区（NOMAP，如 BL31/BL32） */
+	ut_assertok(lmb_alloc_mem(LMB_MEM_ALLOC_ADDR, 0, &rsv, 0x1000, LMB_NOMAP));
+	ut_asserteq_str("failed:range overlaps memory reserved for U-Boot or firmware",
+			bulkcmdf(f, "download mem 0x%llx normal 0x10", (u64)rsv + 0x800));
+	ut_assertok(lmb_free(rsv, 0x1000, LMB_NOMAP));
 	fake_free(f);
 
 	return 0;
@@ -541,6 +560,28 @@ static int cmd_test_optimus_download_store(struct unit_test_state *uts)
 	ut_asserteq_str("success", bulkcmd(f, "store read boot 0x8200000 0x20000 5"));
 	ut_asserteq_mem(disk + BOOT_OFF + 0x20000, map_sysmem(0x8200000, 5), 5);
 
+	/* 帧之间有命令切了硬件分区：拒收、之后整次下载作废，盘不变 */
+	ut_asserteq_str("success", bulkcmd(f, "download store boot normal 0x400"));
+	head(h, 0x200, addsum(data, 0x200), 0xef, 0x200);
+	ut_asserteq_str("OK!!", media(f, h, 32, data, 0x200));
+	memcpy(before, disk, MPT_DISK);
+	desc->hwpart = 1;
+	ut_asserteq_str("failed:the eMMC hardware partition changed during the download",
+			media(f, h, 32, data, 0x200));
+	desc->hwpart = 0;
+	ut_asserteq_str("failed:an earlier media write failed", media(f, h, 32, data, 0x200));
+	ut_asserteq_str("failed:download not complete", bulkcmd(f, "download get_status"));
+	ut_asserteq_mem(before, disk, MPT_DISK);
+
+	/* 写存储失败（设备比分区表说的小，写越出设备末尾）：应答报错，之后的帧都拒收，get_status 失败 */
+	ut_asserteq_str("success", bulkcmd(f, "download store boot normal 0x400"));
+	desc->lba = BOOT_OFF / BLKSZ;
+	ut_asserteq_str("failed:storage write failed", media(f, h, 32, data, 0x200));
+	desc->lba = MPT_DISK / BLKSZ;
+	ut_asserteq_str("failed:an earlier media write failed", media(f, h, 32, data, 0x200));
+	ut_asserteq_str("failed:download not complete", bulkcmd(f, "download get_status"));
+	ut_asserteq_mem(before, disk, MPT_DISK);
+
 	/* 新名字的分区照样按盘上的 MPT 找到；超过分区、未知分区、bootloader、upload store 被拒 */
 	ut_asserteq_str("success", bulkcmd(f, "download store vendor_boot normal 0x10"));
 	ut_asserteq_str("failed:size is larger than the partition",
@@ -653,3 +694,31 @@ static int cmd_test_optimus_defer(struct unit_test_state *uts)
 	return 0;
 }
 CMD_TEST(cmd_test_optimus_defer, 0);
+
+/* optimus 命令把结果写进 optimus_result：参数不对是 usage；sandbox 没有 UDC，合格的参数走到 error（超时与主机离开要上机） */
+static int cmd_test_optimus_result(struct unit_test_state *uts)
+{
+	static const char *const usage[] = {
+		"optimus -t 0 0", "optimus -t 3000x 0", "optimus -t 0o10 0", "optimus x", "optimus",
+	};
+	int i;
+
+	if (!IS_ENABLED(CONFIG_CMD_OPTIMUS))
+		return -EAGAIN;
+	for (i = 0; i < ARRAY_SIZE(usage); i++) {
+		env_set("optimus_result", NULL);
+		ut_asserteq(1, run_command(usage[i], 0));
+		ut_assertnonnull(env_get("optimus_result"));
+		ut_asserteq_str("usage", env_get("optimus_result"));
+	}
+	env_set("optimus_result", NULL);
+	ut_asserteq(1, run_command("optimus -t 0xbb8 0", 0));
+	ut_asserteq_str("error", env_get("optimus_result"));
+	env_set("optimus_result", NULL);
+	ut_asserteq(1, run_command("optimus 0", 0));
+	ut_asserteq_str("error", env_get("optimus_result"));
+	env_set("optimus_result", NULL);
+
+	return 0;
+}
+CMD_TEST(cmd_test_optimus_result, 0);
