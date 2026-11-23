@@ -302,8 +302,13 @@ static int label_localboot(struct pxe_label *label)
 	if (label->append) {
 		char bootargs[CONFIG_SYS_CBSIZE];
 
-		cli_simple_process_macros(label->append, bootargs,
-					  sizeof(bootargs));
+		/* 展开后放不下就不引导：截断的 bootargs 照样能起内核，错在哪里却看不出来 */
+		if (cli_simple_process_macros(label->append, bootargs,
+					      sizeof(bootargs))) {
+			printf("append too long after expanding variables (max %zd)\n",
+			       sizeof(bootargs) - 1);
+			return -ENOSPC;
+		}
 		env_set("bootargs", bootargs);
 	}
 
@@ -653,8 +658,12 @@ static int label_boot(struct pxe_context *ctx, struct pxe_label *label)
 		strcat(bootargs, ip_str);
 		strcat(bootargs, mac_str);
 
-		cli_simple_process_macros(bootargs, finalbootargs,
-					  sizeof(finalbootargs));
+		if (cli_simple_process_macros(bootargs, finalbootargs,
+					      sizeof(finalbootargs))) {
+			printf("append too long after expanding variables (max %zd)\n",
+			       sizeof(finalbootargs) - 1);
+			goto cleanup;
+		}
 		env_set("bootargs", finalbootargs);
 		printf("append: %s\n", finalbootargs);
 	}
