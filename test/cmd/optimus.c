@@ -183,8 +183,19 @@ static int cmd_test_optimus_identify(struct unit_test_state *uts)
 	uint i;
 
 	ut_assertnonnull(f);
+	/* 主机在 = 收到过认得且合格的线刷请求：标准请求（枚举、设配置一类）、未知的厂商请求、方向不对被 STALL 的都不算 */
+	c = req(USB_DIR_IN, USB_REQ_GET_STATUS, 0, 0, 2);
+	ut_assert(optimus_setup(&f->o, &c, f->ep0) < 0);
+	ut_assert(!f->o.host_seen);
+	c = req(VIN, 0x7e, 0, 0, 8);
+	ut_assert(optimus_setup(&f->o, &c, f->ep0) < 0);
+	ut_assert(!f->o.host_seen);
+	c = req(VOUT, OPTIMUS_REQ_IDENTIFY, 0, 0, 8);
+	ut_assert(optimus_setup(&f->o, &c, f->ep0) < 0);
+	ut_assert(!f->o.host_seen);
 	c = req(VIN, OPTIMUS_REQ_IDENTIFY, 0, 0, 8);
 	ut_asserteq(8, optimus_setup(&f->o, &c, f->ep0));
+	ut_assert(f->o.host_seen);
 	ut_asserteq_mem(id, f->ep0, 8);
 	c = req(VIN, OPTIMUS_REQ_IDENTIFY, 0, 0, 4);
 	ut_asserteq(4, optimus_setup(&f->o, &c, f->ep0));
@@ -243,6 +254,12 @@ static int cmd_test_optimus_bulkcmd(struct unit_test_state *uts)
 	strcpy(cmd, "setenv opt_t ");
 	memset(cmd + strlen(cmd), 'y', 512 - strlen(cmd));
 	ut_asserteq_str("<stall>", bulkcmd(f, cmd));
+	ut_asserteq('x', env_get("opt_t")[0]);
+	/* 512 字节的数据阶段里没有 NUL：不执行（解析用的副本只有 511 字节，与 run_command 拿到的不一致） */
+	f->in_len = 0;
+	ut_asserteq(512, ctrl_out(f, OPTIMUS_REQ_BULKCMD, 2, cmd, 512));
+	ut_asserteq(OPTIMUS_REPLY_LEN, f->in_len);
+	ut_asserteq_str("failed:command too long", (char *)f->in);
 	ut_asserteq('x', env_get("opt_t")[0]);
 	free(cmd);
 	env_set("opt_t", NULL);

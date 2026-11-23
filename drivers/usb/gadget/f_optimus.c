@@ -36,7 +36,6 @@ struct f_optimus {
 	struct usb_request *in_req, *out_req;
 	struct optimus core;
 	struct usb_ctrlrequest ctrl;	/* 数据阶段还没收完的 OUT 控制请求 */
-	bool seen_host;			/* 主机设过配置（探测窗口据此判定主机在） */
 	bool in_busy;
 	bool leave_on_in;		/* 请求了离开：这条应答被取走就退出 */
 	bool leaving;
@@ -276,7 +275,6 @@ static int opti_set_alt(struct usb_function *func, unsigned int intf,
 		ret = -ENOMEM;
 		goto err;
 	}
-	opti->seen_host = true;
 
 	return 0;
 err:
@@ -362,7 +360,7 @@ static int f_optimus_session(int controller, ulong probe_ms, char **deferred)
 			puts("optimus: interrupted\n");
 			break;
 		}
-		if (probe_ms && !f->seen_host && get_timer(start) > probe_ms) {
+		if (probe_ms && !f->core.host_seen && get_timer(start) > probe_ms) {
 			ret = -ETIMEDOUT;
 			break;
 		}

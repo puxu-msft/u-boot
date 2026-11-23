@@ -198,6 +198,12 @@ int optimus_run(struct optimus *o, const char *cmd)
 	const char *why = "";
 	int argc = 0, ret;
 
+	/* 512 字节的数据阶段里没有 NUL：解析副本放不下，run_command 却会拿到全长，两者不一致，拒绝 */
+	if (strlen(cmd) >= sizeof(line)) {
+		why = "command too long";
+		ret = -E2BIG;
+		goto reply;
+	}
 	strlcpy(line, cmd, sizeof(line));
 	while (*p && argc < ARRAY_SIZE(argv)) {
 		while (isspace(*p))
@@ -242,6 +248,7 @@ int optimus_run(struct optimus *o, const char *cmd)
 			ret = run_command(cmd, 0);
 		}
 	}
+reply:
 	memset(o->reply, '\0', sizeof(o->reply));
 	if (ret)
 		snprintf(o->reply, sizeof(o->reply), "failed:%s", why);
@@ -278,14 +285,13 @@ static int optimus_read_media(struct optimus *o, u16 value, u16 length, u8 *buf)
 	return length;
 }
 
-int optimus_setup(struct optimus *o, const struct usb_ctrlrequest *ctrl, void *buf)
+/* 认得的厂商请求的 SETUP 阶段：IN 请求返回应答字节数，OUT 请求返回要收的字节数，不认得或不合格的返回负数（STALL） */
+static int optimus_setup_vendor(struct optimus *o, const struct usb_ctrlrequest *ctrl, void *buf)
 {
 	u16 length = le16_to_cpu(ctrl->wLength);
 	u16 value = le16_to_cpu(ctrl->wValue);
 	bool in = ctrl->bRequestType & USB_DIR_IN;
 
-	if ((ctrl->bRequestType & USB_TYPE_MASK) != USB_TYPE_VENDOR)
-		return -EOPNOTSUPP;
 	switch (ctrl->bRequest) {
 	case OPTIMUS_REQ_IDENTIFY:
 		if (!in)
@@ -318,6 +324,20 @@ int optimus_setup(struct optimus *o, const struct usb_ctrlrequest *ctrl, void *b
 	default:
 		return -EOPNOTSUPP;
 	}
+}
+
+int optimus_setup(struct optimus *o, const struct usb_ctrlrequest *ctrl, void *buf)
+{
+	int ret;
+
+	if ((ctrl->bRequestType & USB_TYPE_MASK) != USB_TYPE_VENDOR)
+		return -EOPNOTSUPP;
+	ret = optimus_setup_vendor(o, ctrl, buf);
+	/* 主机在 = 收到过认得、且合格的线刷请求：未知请求、被 STALL 的请求与标准请求（枚举、设配置）都不算 */
+	if (ret >= 0)
+		o->host_seen = true;
+
+	return ret;
 }
 
 static void optimus_media_reply(struct optimus *o, const char *err)

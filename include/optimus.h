@@ -65,6 +65,7 @@ struct optimus {
 	u16 frame_alg, ack_len;
 	const char *frame_err;		/* 控制头就不合格（或收数据前又有了新的声明）时的原因：照收数据，应答报错 */
 
+	bool host_seen;			/* 收到过认得且合格的线刷请求（identify 等）：探测窗口据此判定主机在；设配置、未知请求、被 STALL 的请求都不算 */
 	bool leave;			/* 命令请求离开线刷态（optimus leave） */
 	char *deferred;			/* 离开 USB 之后要执行的命令（redline yes 确认的动作要占用 UDC 时），由传输层取走执行 */
 };
