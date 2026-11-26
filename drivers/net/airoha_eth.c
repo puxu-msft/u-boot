@@ -63,6 +63,12 @@
 
 /* SWITCH */
 #define SWITCH_MFC			0x10
+#define SWITCH_PCR(_n)			(0x2004 + ((_n) * 0x100))
+#define   SWITCH_PCR_MATRIX		GENMASK(23, 16)
+#define SWITCH_SYS_CTRL			0x7000
+#define   SWITCH_SW_SYS_RST		BIT(1)
+#define   SWITCH_SW_REG_RST		BIT(0)
+#define SWITCH_HWTRAP			0x7800
 #define   SWITCH_BC_FFP			GENMASK(31, 24)
 #define   SWITCH_UNM_FFP		GENMASK(23, 16)
 #define   SWITCH_UNU_FFP		GENMASK(15, 8)
@@ -1242,7 +1248,41 @@ static int airoha_switch_init(struct udevice *dev, struct airoha_eth *eth)
 		 * bootbase leaves it in its own config. SYS_CTRL @0x7000, bits
 		 * SW_SYS_RST|SW_REG_RST self-clear when the reset completes.
 		 */
-		airoha_switch_wr(eth, 0x7000, 0x3);
+		airoha_switch_wr(eth, SWITCH_SYS_CTRL, SWITCH_SW_SYS_RST | SWITCH_SW_REG_RST);
+		/*
+		 * 软复位把各口的转发矩阵（PCR 23:16）恢复成缺省的全通，下面写好矩阵之前 WAN 与 LAN 口互相转发（2026-11-26 抓包在 LAN 口上看到 WAN 侧家庭网的组播，复位后人为多等 5 s 的对照件三次都抓到，先清矩阵再多等 5 s 的一次没有）。
+		 * 做法同 Linux mt7530_setup/mt7531_setup_common 的“Disable forwarding by default on all ports”：等复位完成后第一件事把各口的矩阵清零，之后的配置与最终矩阵不变。
+		 * 复位完成的判据（SYS_CTRL 两位自清、HWTRAP 读回非 0）借自外接 MT7530 硬复位后等 MT753X_TRAP 的做法，未与原厂核对：原厂与 Linux 的 EN7528 路径都不对内置交换芯片做这次软复位；两项各至多等 100 ms，等不到只打印一行、照常往下走。
+		 * 复位期间写进去的会被复位冲掉，所以读回核对，不为 0 时隔 1 ms 重写，至多 3 轮；口 0、5 在这颗芯片上不存在（读回 0xdeadbeef），不参与核对。
+		 */
+		{
+			u32 val, left = 0;
+			int p, tries;
+
+			if (read_poll_timeout(airoha_switch_rr, val,
+					      !(val & (SWITCH_SW_SYS_RST | SWITCH_SW_REG_RST)),
+					      10, 100 * USEC_PER_MSEC, eth, SWITCH_SYS_CTRL))
+				printf("%s: switch reset bits still set after 100 ms\n", dev->name);
+			if (read_poll_timeout(airoha_switch_rr, val, val != 0, 10,
+					      100 * USEC_PER_MSEC, eth, SWITCH_HWTRAP))
+				printf("%s: switch HWTRAP still 0 after 100 ms\n", dev->name);
+			for (tries = 0; tries < 3; tries++) {
+				if (tries)
+					mdelay(1);
+				for (p = 0; p < 7; p++)
+					airoha_switch_wr(eth, SWITCH_PCR(p), 0);
+				left = 0;
+				for (p = 1; p <= 6; p++)
+					if (p != 5)
+						left |= airoha_switch_rr(eth, SWITCH_PCR(p)) &
+							SWITCH_PCR_MATRIX;
+				if (!left)
+					break;
+			}
+			if (left)
+				printf("%s: switch port matrix not cleared after reset (0x%x)\n",
+				       dev->name, left);
+		}
 		mdelay(100);
 
 		/* Integrated MT7530: flood unknown traffic to all ports and use P6. */
@@ -1312,7 +1352,8 @@ static int airoha_switch_init(struct udevice *dev, struct airoha_eth *eth)
 				u32 matrix = p == 6 ? eth->user_ports :
 					     (eth->user_ports & BIT(p) ? BIT(6) : 0);
 
-				airoha_switch_wr(eth, 0x2004 + p * 0x100, matrix << 16);
+				airoha_switch_wr(eth, SWITCH_PCR(p),
+						 FIELD_PREP(SWITCH_PCR_MATRIX, matrix));
 				airoha_switch_wr(eth, 0x2010 + p * 0x100,
 						 0x81000000);
 			}
