@@ -10,6 +10,7 @@
 
 #include "ping.h"
 #include "arp.h"
+#include <env.h>
 #include <log.h>
 #include <net.h>
 
@@ -69,8 +70,16 @@ static void ping_timeout_handler(void)
 
 void ping_start(void)
 {
+	/* 等应答的时限（毫秒）可由 env pingtimeout 设定，缺省照旧 10 s：对方答 ARP 不答 ping 时，探测主机用的 ping 不必等满 10 s。下限照 tftptimeout 取 1000 ms：0 会让 net_set_timeout_handler 取消超时、ping 永不返回 */
+	ulong timeout_ms = env_get_ulong("pingtimeout", 10, 10000UL);
+
 	printf("Using %s device\n", eth_get_name());
-	net_set_timeout_handler(10000UL, ping_timeout_handler);
+	if (timeout_ms < 1000) {
+		printf("ping timeout (%lu ms) too low, set min = 1000 ms\n",
+		       timeout_ms);
+		timeout_ms = 1000;
+	}
+	net_set_timeout_handler(timeout_ms, ping_timeout_handler);
 
 	ping_send();
 }

@@ -344,6 +344,9 @@ phy_aneg_timeout
     PHY they use. Alternatively, the timeout can be reduced as well if the
     use-case demands it.
 
+pingtimeout
+    ping 等应答的时限（毫秒，十进制，最小 1000 即 1 秒，设得更小按 1000 算），不设时为 10000 即 10 秒。对方答 ARP 却不答 ICMP echo 时 ping 要等满这个时限，用 ping 探测主机在不在的脚本可以把它调低。
+
 rng_seed_size
     Size of random value added to device-tree node /chosen/rng-seed.
     This variable is given as a decimal number.
