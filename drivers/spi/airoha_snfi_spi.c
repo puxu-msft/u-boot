@@ -328,7 +328,7 @@ static int airoha_snand_set_fifo_op(struct airoha_snand_priv *priv,
 	err = regmap_read_poll_timeout(priv->regmap_ctrl,
 				       REG_SPI_CTRL_OPFIFO_FULL,
 				       val, !(val & SPI_CTRL_OPFIFO_FULL),
-				       0, 250 * USEC_PER_MSEC);
+				       0, 250);
 	if (err)
 		return err;
 
@@ -340,7 +340,7 @@ static int airoha_snand_set_fifo_op(struct airoha_snand_priv *priv,
 	return regmap_read_poll_timeout(priv->regmap_ctrl,
 					REG_SPI_CTRL_OPFIFO_EMPTY,
 					val, (val & SPI_CTRL_OPFIFO_EMPTY),
-					0, 250 * USEC_PER_MSEC);
+					0, 250);
 }
 
 static int airoha_snand_set_cs(struct airoha_snand_priv *priv, u8 cs)
@@ -373,7 +373,7 @@ static int airoha_snand_write_data_to_fifo(struct airoha_snand_priv *priv,
 		err = regmap_read_poll_timeout(priv->regmap_ctrl,
 					       REG_SPI_CTRL_DFIFO_FULL, val,
 					       !(val & SPI_CTRL_DFIFO_FULL),
-					       0, 250 * USEC_PER_MSEC);
+					       0, 250);
 		if (err)
 			return err;
 
@@ -388,7 +388,7 @@ static int airoha_snand_write_data_to_fifo(struct airoha_snand_priv *priv,
 		err = regmap_read_poll_timeout(priv->regmap_ctrl,
 					       REG_SPI_CTRL_DFIFO_FULL, val,
 					       !(val & SPI_CTRL_DFIFO_FULL),
-					       0, 250 * USEC_PER_MSEC);
+					       0, 250);
 		if (err)
 			return err;
 	}
@@ -409,7 +409,7 @@ static int airoha_snand_read_data_from_fifo(struct airoha_snand_priv *priv,
 		err = regmap_read_poll_timeout(priv->regmap_ctrl,
 					       REG_SPI_CTRL_DFIFO_EMPTY, val,
 					       !val,
-					       0, 250 * USEC_PER_MSEC);
+					       0, 250);
 		if (err)
 			return err;
 
@@ -452,7 +452,7 @@ static int airoha_snand_set_mode(struct airoha_snand_priv *priv,
 		err = regmap_read_poll_timeout(priv->regmap_ctrl,
 					       REG_SPI_CTRL_RDCTL_FSM, val,
 					       !(val & SPI_CTRL_RDCTL_FSM),
-					       0, 250 * USEC_PER_MSEC);
+					       0, 250);
 		if (err)
 			return err;
 
