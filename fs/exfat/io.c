@@ -411,7 +411,8 @@ struct exfat_dev* exfat_open(const char* spec, enum exfat_mode mode)
 		exfat_error("failed to allocate memory for device structure");
 		return NULL;
 	}
-	dev->mode = EXFAT_MODE_RW;
+	/* 照调用方要的模式：只读挂载（exfat_fs_probe）卸载时 finalize_super_block 不把引导扇区写回 */
+	dev->mode = mode == EXFAT_MODE_RO ? EXFAT_MODE_RO : EXFAT_MODE_RW;
 	dev->size = ctxt.cur_part_info.size * ctxt.cur_part_info.blksz;
 	dev->ctxt = &ctxt;
 
@@ -614,13 +615,32 @@ int exfat_fs_probe(struct blk_desc *fs_dev_desc,
 	ctxt.cur_dev = fs_dev_desc;
 	ctxt.cur_part_info = *fs_partition;
 
-	ret = exfat_mount(&ctxt.ef, NULL, "");
+	/*
+	 * 先按只读挂载：读文件、test -e、ls 都走这里，卸载时不回写引导扇区（不清卷标志里的“未正常卸载”位、不改已用百分比）；写操作在动手之前由 exfat_fs_remount_rw 换成读写挂载。
+	 */
+	ret = exfat_mount(&ctxt.ef, NULL, "ro");
 	if (ret)
 		goto error;
 
 	return 0;
 error:
 	ctxt.cur_dev = NULL;
+	return ret;
+}
+
+/* 写操作之前把 exfat_fs_probe 的只读挂载换成读写挂载；失败时清掉 cur_dev，exfat_fs_close 就不再卸载 */
+static int exfat_fs_remount_rw(void)
+{
+	int ret;
+
+	if (!ctxt.ef.ro)
+		return 0;
+
+	exfat_unmount(&ctxt.ef);
+	ret = exfat_mount(&ctxt.ef, NULL, "");
+	if (ret)
+		ctxt.cur_dev = NULL;
+
 	return ret;
 }
 
@@ -935,6 +955,10 @@ int exfat_fs_unlink(const char *filename)
 	struct exfat_node* node;
 	int err;
 
+	err = exfat_fs_remount_rw();
+	if (err)
+		return err;
+
 	err = exfat_lookup_realpath(&ctxt.ef, &node, filename);
 	if (err) {
 		printf("%s: doesn't exist (%d)\n", filename, err);
@@ -962,8 +986,14 @@ exit:
 
 int exfat_fs_mkdir(const char *dirname)
 {
+	int err;
+
 	if (!strcmp(dirname, ".") || !strcmp(dirname, ".."))
 		return -EINVAL;
+
+	err = exfat_fs_remount_rw();
+	if (err)
+		return err;
 
 	return exfat_mkdir(&ctxt.ef, dirname);
 }
@@ -974,6 +1004,10 @@ int exfat_fs_write(const char *filename, void *buf, loff_t offset,
 	struct exfat_node* node;
 	ssize_t sz;
 	int err;
+
+	err = exfat_fs_remount_rw();
+	if (err)
+		return err;
 
 	/*
 	 * Ignore -EEXIST error here, if the file exists,
@@ -1018,12 +1052,20 @@ exit:
 
 int exfat_fs_rename(const char *old_path, const char *new_path)
 {
+	int err;
+
+	err = exfat_fs_remount_rw();
+	if (err)
+		return err;
+
 	return exfat_rename(&ctxt.ef, old_path, new_path);
 }
 
 void exfat_fs_close(void)
 {
-	exfat_unmount(&ctxt.ef);
+	/* 写操作重挂读写失败时已经卸载过、cur_dev 已清 */
+	if (ctxt.cur_dev)
+		exfat_unmount(&ctxt.ef);
 	ctxt.cur_dev = NULL;
 }
 #endif	/* __U_BOOT__ */
