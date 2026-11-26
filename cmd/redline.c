@@ -783,7 +783,8 @@ struct rl_fid {
 /*
  * 放行：0x84000009 PSCI SYSTEM_RESET（Amlogic BL31 把 x1 当重启原因；m12.env 的 m12_boot_reset 与开发循环回线刷态用）、0x82000049 Amlogic 设重启原因（m12.env 的 m12_android_reason）；它们只改重启原因与复位，不碰存储。
  * 以及只返回信息的查询：PSCI_VERSION 与 PSCI_FEATURES（TF-A v1.3 psci_main.c 里分别返回常量与 psci_caps 位）、SMCCC_VERSION 与 SMCCC_ARCH_FEATURES（SMCCC 的发现调用，drivers/firmware/psci.c 探测时就这样用；没有该服务的固件返回 NOT_SUPPORTED）。
- * 以及 Amlogic 厂商 BL31 安全存储的只读调用，供手工做 RAM 级实验（在控制台上 mw 填输入共享缓冲、smc、md 看输出缓冲）：取四块共享缓冲的地址与块大小（返回常量或读全局）、QUERY/READ/TELL/VERIFY/STATUS/LIST（只读 key 表，只往输出共享缓冲写）、GET_ENCTYPE（经 SCP 邮箱读 eFuse，只读）、VERSION；依据 M12 厂商 BL31 v1.3:079690f10 的反汇编，它们没有计数、锁定等副作用。改存储与 BL31 运行态的 WRITE 0x82000062、REMOVE 0x82000068、NOTIFY 0x82000066、NOTIFY_EX 0x82000069、SET_ENCTYPE 0x8200006a、SET_STORAGE_INFO 0x82000028 不放行
+ * 以及 Amlogic 厂商 BL31 安全存储的只读调用，供手工做 RAM 级实验（在控制台上 mw 填输入共享缓冲、smc、md 看输出缓冲）：取四块共享缓冲的地址与块大小（返回常量或读全局）、QUERY/READ/TELL/VERIFY/STATUS/LIST（只读 key 表，只往输出共享缓冲写）、GET_ENCTYPE（经 SCP 邮箱读 eFuse，只读）、VERSION；依据 M12 厂商 BL31 v1.3:079690f10 的反汇编，它们没有计数、锁定等副作用。改存储与 BL31 运行态的 WRITE 0x82000062、REMOVE 0x82000068、NOTIFY 0x82000066、NOTIFY_EX 0x82000069、SET_ENCTYPE 0x8200006a、SET_STORAGE_INFO 0x82000028 不放行。
+ * 以及自维护 TF-A 试验构建的整片 eFuse 只读导出 0x820000f1（M12 TF-A 补丁 0018，只在 --efuse-dump 构建里有）：经 SCP 的 eFuse 读命令把整片读进输出共享区，不烧 eFuse、只有调用序号加一；厂商 BL31 与不带它的构建回 SMC_UNK（用户 2026-11-26 定：作只读调用放行）
  */
 static const struct rl_fid smc_allowed[] = {
 	{ 0x84000009, "PSCI SYSTEM_RESET" },
@@ -805,6 +806,7 @@ static const struct rl_fid smc_allowed[] = {
 	{ 0x82000067, "Amlogic secure storage: list" },
 	{ 0x8200006b, "Amlogic secure storage: get encryption type" },
 	{ 0x8200006c, "Amlogic secure storage: version" },
+	{ 0x820000f1, "homeiot TF-A trial build: whole eFuse read-out (read-only)" },
 };
 
 /* 拦下时能叫出名字的 fid：Amlogic SiP 调用取自 drivers/sm/meson-sm.c 的 meson_sm_gxbb_data 与 M12 厂商 BL31 的反汇编，PSCI 取自 include/linux/psci.h */
@@ -922,7 +924,7 @@ static bool rl_smc(struct rl_text *t, const char *name, int argc,
 		rl_printf(t, "  function: W0 0x%08x = %s\n", (u32)fid, what);
 	rl_printf(t, "  args    : x1 0x%lx, x2 0x%lx, x3 0x%lx, x4 0x%lx, x5 0x%lx, x6 0x%lx, w7 0x%lx\n",
 		  a[0], a[1], a[2], a[3], a[4], a[5], a[6]);
-	rl_puts(t, "  allowed : PSCI SYSTEM_RESET 0x84000009 and Amlogic set reboot reason 0x82000049 (not with reboot reason 9), PSCI_VERSION, PSCI_FEATURES, SMCCC_VERSION, SMCCC_ARCH_FEATURES, Amlogic secure storage read-only calls 0x82000023-0x82000027, 0x82000060/61/63/64/65/67/6b/6c\n");
+	rl_puts(t, "  allowed : PSCI SYSTEM_RESET 0x84000009 and Amlogic set reboot reason 0x82000049 (not with reboot reason 9), PSCI_VERSION, PSCI_FEATURES, SMCCC_VERSION, SMCCC_ARCH_FEATURES, Amlogic secure storage read-only calls 0x82000023-0x82000027, 0x82000060/61/63/64/65/67/6b/6c, homeiot TF-A trial eFuse read-out 0x820000f1\n");
 	if ((u32)fid == RL_SMC_EFUSE_WRITE) {
 		rl_smc_efuse(t, a[0], a[1]);
 		rl_puts(t, "  IRREVERSIBLE: eFuse bits are one-time programmable\n");

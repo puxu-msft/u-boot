@@ -873,7 +873,7 @@ static int cmd_test_redline_erase_group(struct unit_test_state *uts)
 }
 CMD_TEST(cmd_test_redline_erase_group, UTF_CONSOLE);
 
-#define SMC_ALLOWED	"  allowed : PSCI SYSTEM_RESET 0x84000009 and Amlogic set reboot reason 0x82000049 (not with reboot reason 9), PSCI_VERSION, PSCI_FEATURES, SMCCC_VERSION, SMCCC_ARCH_FEATURES, Amlogic secure storage read-only calls 0x82000023-0x82000027, 0x82000060/61/63/64/65/67/6b/6c"
+#define SMC_ALLOWED	"  allowed : PSCI SYSTEM_RESET 0x84000009 and Amlogic set reboot reason 0x82000049 (not with reboot reason 9), PSCI_VERSION, PSCI_FEATURES, SMCCC_VERSION, SMCCC_ARCH_FEATURES, Amlogic secure storage read-only calls 0x82000023-0x82000027, 0x82000060/61/63/64/65/67/6b/6c, homeiot TF-A trial eFuse read-out 0x820000f1"
 #define RPMBP_IRREV	"  IRREVERSIBLE: reboot reason 9 (rpmbp): on the next eMMC boot the vendor BL2 programs the RPMB authentication key if it cannot read the RPMB write counter; an RPMB key can be programmed only once"
 
 /* 伪造命令表项 @name 直接过红线门：放行时返回 0、不打印、不动待确认动作 */
@@ -1046,7 +1046,7 @@ static int cmd_test_redline_smc_storage(struct unit_test_state *uts)
 	static const char *const allowed[] = {
 		"0x82000023", "0x82000024", "0x82000025", "0x82000026", "0x82000027",
 		"0x82000060", "0x82000061", "0x82000063", "0x82000064", "0x82000065",
-		"0x82000067", "0x8200006b", "0x8200006c",
+		"0x82000067", "0x8200006b", "0x8200006c", "0x820000f1",
 	};
 	static const struct {
 		const char *fid;
