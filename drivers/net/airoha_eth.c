@@ -9,6 +9,7 @@
  *         Christian Marangi <ansuelsmth@gmail.org>
  */
 
+#include <command.h>
 #include <console.h>
 #include <dm.h>
 #include <dm/device-internal.h>
@@ -220,6 +221,7 @@
 #define EN751221_RST_QDMA0		BIT(1)		/* bank1: FE_QDMA1 "qdma0" */
 #define EN751221_RST_QDMA1		BIT(2)		/* bank1: FE_QDMA2 "qdma1" (was missing) */
 #define EN751221_RST_FE			BIT(21)		/* bank1: FE_RST */
+#define EN751221_RST_GSW		BIT(23)		/* bank1: 内置交换芯片（含 GPHY），Linux DTS 的 EN7523_GSW_RST */
 #define EN751221_RST_XPON_MAC		BIT(31)		/* bank1: XPON_MAC (was missing) */
 #define EN751221_RST_XPON_PHY		BIT(0)		/* bank0: XPON_PHY (was missing) */
 
@@ -1617,6 +1619,255 @@ static int airoha_eth_port_of_to_plat(struct udevice *dev)
 	return 0;
 }
 
+/*
+ * EN7528 内置 GPHY（交换芯片 MDIO 地址 9–12，PHY ID 0x03a29491）在 U-Boot 入口的设置，照原厂 tcboot 每次复位交换芯片之后做的那几步（tcboot-stage2 的 0x87fc0fa8 Rext、0x87fc12d0 CTRL1000 = 0；GS2107 docs/35 N45）：PHY 9 上做一次 Rext 修调，四口只通告 10/100，再重启自协商。
+ * tcboot 自动启动跳进 U-Boot 之前还会打一次 GSW 复位脉冲，之后不再设 GPHY；GPHY 以复位缺省（通告千兆、没有 Rext）协商时每轮约一半机会接通、约 3.7 s 一轮，常超过网络一级等链路的上限。U-Boot 段只取启动件，百兆足够；Linux 复位交换芯片之后自己做全套配置表与校准，不受这里影响。
+ * 只在 GPHY 还在缺省态（有口的 CTRL1000 通告千兆）时动手：已经设好的（如 chainload 版由现行 U-Boot 起来时）不重启自协商、不打断链路。
+ * tcboot 的遗留代码把 PHY 9–11 的页寄存器（reg31）留在 0x8000；0–15 号寄存器分不分页未核实，访问前先回页 0 是保险做法，设完都留在页 0。
+ * MMD 间接访问是 reg13/14 上的多次事务，期间暂停交换芯片的 PHY 自动轮询与 EEE 轮询（0x7018 的 [30:16]），免得硬件轮询的 MDIO 访问插进来；tcboot 在 Rext 之后才开轮询，原厂与我们的 Linux 都不开。
+ */
+#define EN7528_GPHY_FIRST		9
+#define EN7528_GPHY_LAST		12
+#define EN7528_GPHY_CAL			9	/* 整块 GPHY 的模拟校准引擎与 Rext 结果都在 PHY 9 上 */
+#define EN7528_GPHY_ID1			0x03a2
+#define EN7528_GPHY_ID2			0x9491
+#define EN7528_GPHY_PAGE		0x1f
+#define EN7528_MMD_VEND1		0x1e
+#define EN7528_MMD_VEND2		0x1f
+#define EN7528_REXT_START		0x20
+#define EN7528_REXT_MAX			0x3f
+#define EN7528_GPHY_SETUP_REXT		BIT(0)
+#define EN7528_GPHY_SETUP_ADV100	BIT(1)
+#define EN7528_SWITCH_READY		0x000c	/* bit17：GSW 复位释放后就绪（原厂 eth.ko macReset 轮询它） */
+#define EN7528_SWITCH_READY_BIT		BIT(17)
+
+static u32 en7528_poll_pause(struct airoha_eth *eth)
+{
+	u32 poll = airoha_switch_rr(eth, SWITCH_PHY_POLL);
+
+	airoha_switch_wr(eth, SWITCH_PHY_POLL, poll & ~(SWITCH_PHY_AP_EN | SWITCH_EEE_POLL_EN));
+	udelay(1000);	/* 让已经开始的一轮轮询做完 */
+	return poll;
+}
+
+static void en7528_poll_resume(struct airoha_eth *eth, u32 poll)
+{
+	airoha_switch_wr(eth, SWITCH_PHY_POLL, poll);
+}
+
+static int en7528_gphy_rd(struct udevice *mdio, int addr, int reg)
+{
+	return dm_mdio_read(mdio, addr, MDIO_DEVAD_NONE, reg);
+}
+
+static int en7528_gphy_wr(struct udevice *mdio, int addr, int reg, u16 val)
+{
+	return dm_mdio_write(mdio, addr, MDIO_DEVAD_NONE, reg, val);
+}
+
+/* MMD 经 C22 寄存器 13/14 间接访问（与原厂 tcMiiExtStationWrite_CL22、tcboot 0x87fbfeec 相同），先回页 0 */
+static void en7528_mmd_sel(struct udevice *mdio, int addr, int dev, int reg)
+{
+	en7528_gphy_wr(mdio, addr, EN7528_GPHY_PAGE, 0);
+	en7528_gphy_wr(mdio, addr, MII_MMD_CTRL, dev);
+	en7528_gphy_wr(mdio, addr, MII_MMD_DATA, reg);
+	en7528_gphy_wr(mdio, addr, MII_MMD_CTRL, MII_MMD_CTRL_NOINCR | dev);
+}
+
+static int en7528_mmd_rd(struct udevice *mdio, int addr, int dev, int reg)
+{
+	en7528_mmd_sel(mdio, addr, dev, reg);
+	return en7528_gphy_rd(mdio, addr, MII_MMD_DATA);
+}
+
+static int en7528_mmd_wr(struct udevice *mdio, int addr, int dev, int reg, u16 val)
+{
+	en7528_mmd_sel(mdio, addr, dev, reg);
+	return en7528_gphy_wr(mdio, addr, MII_MMD_DATA, val);
+}
+
+/* 地址上是不是 EN7528 内置 GPHY：先按当前页读 ID，页寄存器不为 0 时回页 0 再读一次，仍不是就把页寄存器还原 */
+static bool en7528_gphy_is(struct udevice *mdio, int addr)
+{
+	int page;
+
+	if (en7528_gphy_rd(mdio, addr, MII_PHYSID1) == EN7528_GPHY_ID1 &&
+	    en7528_gphy_rd(mdio, addr, MII_PHYSID2) == EN7528_GPHY_ID2)
+		return true;
+	page = en7528_gphy_rd(mdio, addr, EN7528_GPHY_PAGE);
+	if (page <= 0 || page == 0xffff)
+		return false;
+	en7528_gphy_wr(mdio, addr, EN7528_GPHY_PAGE, 0);
+	if (en7528_gphy_rd(mdio, addr, MII_PHYSID1) == EN7528_GPHY_ID1 &&
+	    en7528_gphy_rd(mdio, addr, MII_PHYSID2) == EN7528_GPHY_ID2)
+		return true;
+	en7528_gphy_wr(mdio, addr, EN7528_GPHY_PAGE, page);
+	return false;
+}
+
+static u32 en7528_gphy_ports(struct udevice *mdio)
+{
+	u32 ports = 0;
+	int addr;
+
+	for (addr = EN7528_GPHY_FIRST; addr <= EN7528_GPHY_LAST; addr++)
+		if (en7528_gphy_is(mdio, addr))
+			ports |= BIT(addr);
+	return ports;
+}
+
+/* Rext 的一次比较：PHY 9 的 0x17c 置 1，等 100 µs（原厂内核的等待；tcboot 等一个约 10 ms 的节拍），0x17b[0] 是完成位，比较结果在 0x17a[8] */
+static int en7528_rext_compare(struct udevice *mdio, int *comp)
+{
+	int done, val;
+
+	en7528_mmd_wr(mdio, EN7528_GPHY_CAL, EN7528_MMD_VEND1, 0x17c, 0x0001);
+	udelay(100);
+	done = en7528_mmd_rd(mdio, EN7528_GPHY_CAL, EN7528_MMD_VEND1, 0x17b);
+	en7528_mmd_wr(mdio, EN7528_GPHY_CAL, EN7528_MMD_VEND1, 0x17c, 0x0000);
+	if (done < 0)
+		return done;
+	if (!(done & 0x1))
+		return -ETIMEDOUT;
+	val = en7528_mmd_rd(mdio, EN7528_GPHY_CAL, EN7528_MMD_VEND1, 0x17a);
+	if (val < 0)
+		return val;
+	*comp = (val >> 8) & 0x1;
+	return 0;
+}
+
+/*
+ * Rext 修调，比较与写回同 tcboot 0x87fc0fa8 与原厂内核 GECal_Rext（Linux 侧见 OpenWrt 内核补丁 917 的 en7528_gphy_rext）：从 0x20 起逐码写 1e.0x0e0，直到比较器翻转；成功写回 1e.0x0e0 的 [13:8] 与 [5:0]、1f.0x115（BG_RASEL = 码的 [5:3]），饱和时按 0x20 写回（即复位值），出错时 1e.0x0e0 写回原值 | 0x20。tcboot 不写 SCU 0x16c，这里也不写。
+ * 前后照原厂内核的校准进入与还原（917 的 en7528_gphy_cal）：PHY 9 强制 1000 全双工、1f.0x100 = 0xc000、1e.0x145 = 0x1010、1e.0x185 = 0、1e.0x0fb = 0x0100，做完还原 BMCR、1f.0x100 与这三项。Linux 侧在 GS2107 上实测：不做这几步、每次比较等 100 µs 时 Rext 走满 31 步饱和，做了得 0x18、8 步，与原厂日志相同（captures/layout-audit-20261125/gphycal-stage-ab.log）。原厂内核把 0x185、0x0fb 留在校准值，那是接着做 R45 等几项的前提；这里只做 Rext，一并还原。
+ * 返回 0（翻转结束）、1（饱和）或负的错误码，*code 是写回的码。
+ */
+static int en7528_gphy_rext(struct udevice *mdio, int *code)
+{
+	const int pa = EN7528_GPHY_CAL;
+	int bmcr, r145, r185, r0fb, saved, c0, c, step, ret, st = 0;
+
+	*code = EN7528_REXT_START;
+	en7528_gphy_wr(mdio, pa, EN7528_GPHY_PAGE, 0);
+	bmcr = en7528_gphy_rd(mdio, pa, MII_BMCR);
+	en7528_gphy_wr(mdio, pa, MII_BMCR, BMCR_SPEED1000 | BMCR_FULLDPLX);
+	en7528_mmd_wr(mdio, pa, EN7528_MMD_VEND2, 0x100, 0xc000);
+	r145 = en7528_mmd_rd(mdio, pa, EN7528_MMD_VEND1, 0x145);
+	r185 = en7528_mmd_rd(mdio, pa, EN7528_MMD_VEND1, 0x185);
+	r0fb = en7528_mmd_rd(mdio, pa, EN7528_MMD_VEND1, 0x0fb);
+	en7528_mmd_wr(mdio, pa, EN7528_MMD_VEND1, 0x145, 0x1010);
+	en7528_mmd_wr(mdio, pa, EN7528_MMD_VEND1, 0x185, 0x0000);
+	en7528_mmd_wr(mdio, pa, EN7528_MMD_VEND1, 0x0fb, 0x0100);
+
+	en7528_mmd_wr(mdio, pa, EN7528_MMD_VEND1, 0x0db, 0x1110);
+	en7528_mmd_wr(mdio, pa, EN7528_MMD_VEND1, 0x0dc, 0x0000);
+	en7528_mmd_wr(mdio, pa, EN7528_MMD_VEND1, 0x0e1, 0x0000);
+	saved = en7528_mmd_rd(mdio, pa, EN7528_MMD_VEND1, 0x0e0);
+	ret = saved < 0 ? saved : 0;
+	if (!ret) {
+		en7528_mmd_wr(mdio, pa, EN7528_MMD_VEND1, 0x0e0, *code);
+		ret = en7528_rext_compare(mdio, &c0);
+	}
+	if (!ret) {
+		step = c0 ? -1 : 1;
+		for (;;) {
+			*code += step;
+			en7528_mmd_wr(mdio, pa, EN7528_MMD_VEND1, 0x0e0, *code);
+			ret = en7528_rext_compare(mdio, &c);
+			if (ret || c != c0)
+				break;
+			if (*code == 0 || *code == EN7528_REXT_MAX) {
+				*code = EN7528_REXT_START;
+				st = 1;
+				break;
+			}
+		}
+	}
+	if (ret) {
+		*code = EN7528_REXT_START;
+		en7528_mmd_wr(mdio, pa, EN7528_MMD_VEND1, 0x0e0, (saved < 0 ? 0 : saved) | EN7528_REXT_START);
+	} else {
+		en7528_mmd_wr(mdio, pa, EN7528_MMD_VEND1, 0x0e0, *code | saved);
+		en7528_mmd_wr(mdio, pa, EN7528_MMD_VEND1, 0x0e0, (*code << 8) | *code);
+		en7528_mmd_wr(mdio, pa, EN7528_MMD_VEND2, 0x115, (*code >> 3) & 0x7);
+	}
+	en7528_mmd_wr(mdio, pa, EN7528_MMD_VEND1, 0x0db, 0x0000);
+
+	if (r0fb >= 0)
+		en7528_mmd_wr(mdio, pa, EN7528_MMD_VEND1, 0x0fb, r0fb);
+	if (r185 >= 0)
+		en7528_mmd_wr(mdio, pa, EN7528_MMD_VEND1, 0x185, r185);
+	if (r145 >= 0)
+		en7528_mmd_wr(mdio, pa, EN7528_MMD_VEND1, 0x145, r145);
+	en7528_mmd_wr(mdio, pa, EN7528_MMD_VEND2, 0x100, 0x0000);
+	en7528_gphy_wr(mdio, pa, EN7528_GPHY_PAGE, 0);
+	if (bmcr >= 0)
+		en7528_gphy_wr(mdio, pa, MII_BMCR, bmcr);
+	return ret ? ret : st;
+}
+
+/* 对 ports 里的 GPHY 做 flags 里的几步（EN7528_GPHY_SETUP_*：Rext 只在 PHY 9 上做；ADV100 是 CTRL1000 = 0 再重启自协商），把做了什么写进 buf（rext=0x.. 是翻转结束的码，sat 是饱和、按复位值写回，errN 是出错） */
+static void en7528_gphy_apply(struct airoha_eth *eth, struct udevice *mdio, u32 ports, int flags, char *buf, size_t len)
+{
+	int addr, code, st, n;
+	u32 poll;
+
+	poll = en7528_poll_pause(eth);
+	n = snprintf(buf, len, "ports=0x%x", ports);
+	if ((flags & EN7528_GPHY_SETUP_REXT) && (ports & BIT(EN7528_GPHY_CAL))) {
+		st = en7528_gphy_rext(mdio, &code);
+		if (st < 0)
+			n += snprintf(buf + n, len - n, " rext=err%d", st);
+		else if (st)
+			n += snprintf(buf + n, len - n, " rext=sat");
+		else
+			n += snprintf(buf + n, len - n, " rext=0x%02x", code);
+	}
+	if (flags & EN7528_GPHY_SETUP_ADV100) {
+		for (addr = EN7528_GPHY_FIRST; addr <= EN7528_GPHY_LAST; addr++) {
+			if (!(ports & BIT(addr)))
+				continue;
+			en7528_gphy_wr(mdio, addr, EN7528_GPHY_PAGE, 0);
+			en7528_gphy_wr(mdio, addr, MII_CTRL1000, 0);
+			en7528_gphy_wr(mdio, addr, MII_BMCR, BMCR_ANENABLE | BMCR_ANRESTART);
+		}
+		snprintf(buf + n, len - n, " adv100");
+	}
+	for (addr = EN7528_GPHY_FIRST; addr <= EN7528_GPHY_LAST; addr++)
+		if (ports & BIT(addr))
+			en7528_gphy_wr(mdio, addr, EN7528_GPHY_PAGE, 0);
+	en7528_poll_resume(eth, poll);
+}
+
+/* U-Boot 入口：GPHY 还在复位缺省态时照 tcboot 设好。做了什么记进运行期变量 gphysetup（只在内存里），网络启动脚本经 netconsole 打出来 */
+static void en7528_gphy_init(struct airoha_eth *eth)
+{
+	struct udevice *mdio = eth->switch_mdio_dev;
+	u32 ports;
+	int addr, c1000;
+	bool dflt = false;
+	char buf[64];
+
+	if (!mdio)
+		return;
+	ports = en7528_gphy_ports(mdio);
+	if (!ports)
+		return;
+	for (addr = EN7528_GPHY_FIRST; addr <= EN7528_GPHY_LAST; addr++) {
+		if (!(ports & BIT(addr)))
+			continue;
+		en7528_gphy_wr(mdio, addr, EN7528_GPHY_PAGE, 0);
+		c1000 = en7528_gphy_rd(mdio, addr, MII_CTRL1000);
+		if (c1000 < 0 || (c1000 & (ADVERTISE_1000FULL | ADVERTISE_1000HALF)))
+			dflt = true;
+	}
+	if (!dflt) {
+		env_set("gphysetup", "kept");
+		return;
+	}
+	en7528_gphy_apply(eth, mdio, ports, EN7528_GPHY_SETUP_REXT | EN7528_GPHY_SETUP_ADV100, buf, sizeof(buf));
+	env_set("gphysetup", buf);
+}
+
 static int airoha_eth_port_probe(struct udevice *dev)
 {
 	struct airoha_eth *eth = (void *)dev_get_driver_data(dev);
@@ -1648,6 +1899,8 @@ static int airoha_eth_port_probe(struct udevice *dev)
 		if (ret) {
 			debug("Warning: failed to probe airoha switch mdio\n");
 			eth->switch_mdio_dev = NULL;
+		} else if (airoha_is_en751221(eth)) {
+			en7528_gphy_init(eth);
 		}
 	}
 
@@ -2202,3 +2455,116 @@ U_BOOT_DRIVER(airoha_eth) = {
 	.bind = airoha_eth_bind,
 	.priv_auto = sizeof(struct airoha_eth),
 };
+
+#if IS_ENABLED(CONFIG_CMDLINE)
+/*
+ * gphy：EN7528 内置 GPHY 的试验钩子（GS2107 docs/35 N45 的区分实验：复现 tcboot 跳转前的复位、比较各种设法的建链用时）。命令之间 U-Boot 不收发；用 netconsole 时先把 stdout 换成 serial，免得命令自己的输出在链路断着时去启动网口。
+ */
+/* PHY 9–12 对应交换芯片口 1–4；口的 PMSR 给出协商结果（bit0 链路、bit1 全双工、[3:2] 速率 0/1/2 = 10/100/1000） */
+static void en7528_gphy_dump(struct airoha_eth *eth, struct udevice *mdio)
+{
+	char buf[480];
+	int addr, page, n = 0;
+	u32 poll = en7528_poll_pause(eth);
+
+	for (addr = EN7528_GPHY_FIRST; addr <= EN7528_GPHY_LAST; addr++) {
+		page = en7528_gphy_rd(mdio, addr, EN7528_GPHY_PAGE);
+		en7528_gphy_wr(mdio, addr, EN7528_GPHY_PAGE, 0);
+		en7528_gphy_rd(mdio, addr, MII_BMSR);	/* 链路位是锁存低：第二次读才是当前状态 */
+		n += snprintf(buf + n, sizeof(buf) - n,
+			      "%s%d:id=%04x%04x,pg=%04x,bmcr=%04x,bmsr=%04x,c1000=%04x,s1000=%04x,pmsr=%02x",
+			      n ? " " : "", addr,
+			      en7528_gphy_rd(mdio, addr, MII_PHYSID1) & 0xffff,
+			      en7528_gphy_rd(mdio, addr, MII_PHYSID2) & 0xffff,
+			      page & 0xffff,
+			      en7528_gphy_rd(mdio, addr, MII_BMCR) & 0xffff,
+			      en7528_gphy_rd(mdio, addr, MII_BMSR) & 0xffff,
+			      en7528_gphy_rd(mdio, addr, MII_CTRL1000) & 0xffff,
+			      en7528_gphy_rd(mdio, addr, MII_STAT1000) & 0xffff,
+			      airoha_switch_rr(eth, SWITCH_PMSR(addr - 8)) & 0xff);
+		if (addr == EN7528_GPHY_CAL)
+			n += snprintf(buf + n, sizeof(buf) - n, ",rext=%04x/%04x",
+				      en7528_mmd_rd(mdio, addr, EN7528_MMD_VEND1, 0x0e0) & 0xffff,
+				      en7528_mmd_rd(mdio, addr, EN7528_MMD_VEND2, 0x115) & 0xffff);
+		if (page >= 0)
+			en7528_gphy_wr(mdio, addr, EN7528_GPHY_PAGE, page);
+	}
+	en7528_poll_resume(eth, poll);
+	printf("%s\n", buf);
+	env_set("gphyregs", buf);
+}
+
+/*
+ * GSW 复位脉冲（SCU 0x1fb00834 bit23）。quick 照 tcboot 跳转前那次（0x87fdfaf4：置位即清，之后约 1 ms 定时器等待、不查就绪位）；hold 照原厂内核 macReset（保持 1 ms，释放后等 1 ms 再轮询 0x1fb5800c bit17）。tcboot 同时脉冲的 FE（bit21）与 QDMA1（bit1）这里不碰：它们复位 U-Boot 正在用的收发通道，与 GPHY 无关。
+ */
+static void en7528_gsw_pulse(struct airoha_eth *eth, bool hold)
+{
+	void __iomem *rst = (void __iomem *)EN751221_RESET_CONTROL_B1;
+	u32 val;
+
+	__raw_writel(__raw_readl(rst) | EN751221_RST_GSW, rst);
+	if (hold)
+		udelay(1000);
+	__raw_writel(__raw_readl(rst) & ~EN751221_RST_GSW, rst);
+	if (!hold) {
+		mdelay(1);
+		return;
+	}
+	udelay(1000);	/* 原厂释放后先等 1 ms 再读就绪位（eth.ko 0x1c5c–0x1c74） */
+	if (read_poll_timeout(airoha_switch_rr, val, val & EN7528_SWITCH_READY_BIT,
+			      100, 5 * USEC_PER_MSEC, eth, EN7528_SWITCH_READY))
+		printf("gphy: switch not ready 5 ms after the reset\n");
+}
+
+static int do_gphy(struct cmd_tbl *cmdtp, int flag, int argc, char *const argv[])
+{
+	struct airoha_eth *eth;
+	struct udevice *dev, *mdio;
+	char buf[64];
+	int flags = 0, i;
+
+	if (argc < 2)
+		return CMD_RET_USAGE;
+	if (uclass_get_device_by_driver(UCLASS_MISC, DM_DRIVER_GET(airoha_eth), &dev))
+		return CMD_RET_FAILURE;
+	eth = dev_get_priv(dev);
+	mdio = eth->switch_mdio_dev;
+	if (!airoha_is_en751221(eth) || !mdio || !device_active(mdio)) {
+		printf("gphy: no econet switch MDIO (probe the network device first)\n");
+		return CMD_RET_FAILURE;
+	}
+	if (!strcmp(argv[1], "dump") && argc == 2) {
+		en7528_gphy_dump(eth, mdio);
+		return CMD_RET_SUCCESS;
+	}
+	if (!strcmp(argv[1], "reset") && argc == 3 &&
+	    (!strcmp(argv[2], "quick") || !strcmp(argv[2], "hold"))) {
+		en7528_gsw_pulse(eth, !strcmp(argv[2], "hold"));
+		/* 复位是故意让链路失效：上一次等链路超时的记号作废，之后的 start 照常等（否则一轮超时会让后面每一轮都立刻 -ENOLINK） */
+		eth->link_wait_timedout = 0;
+		eth->link_required_timedout = false;
+		/* 复位清掉了交换芯片的设置（MFC、PMCR、转发矩阵、PHY 轮询），重做一遍 */
+		return airoha_switch_init(dev, eth) ? CMD_RET_FAILURE : CMD_RET_SUCCESS;
+	}
+	if (!strcmp(argv[1], "setup") && argc >= 3) {
+		for (i = 2; i < argc; i++) {
+			if (!strcmp(argv[i], "rext"))
+				flags |= EN7528_GPHY_SETUP_REXT;
+			else if (!strcmp(argv[i], "adv100"))
+				flags |= EN7528_GPHY_SETUP_ADV100;
+			else
+				return CMD_RET_USAGE;
+		}
+		en7528_gphy_apply(eth, mdio, en7528_gphy_ports(mdio), flags, buf, sizeof(buf));
+		printf("gphy setup: %s\n", buf);
+		env_set("gphysetup", buf);
+		return CMD_RET_SUCCESS;
+	}
+	return CMD_RET_USAGE;
+}
+
+U_BOOT_CMD(gphy, 4, 0, do_gphy, "EN7528 internal GPHY test hooks",
+	   "dump - print PHY 9-12 id/page/BMCR/BMSR/CTRL1000/STAT1000, switch port PMSR and the PHY 9 Rext trim (also into env gphyregs)\n"
+	   "gphy reset quick|hold - pulse the switch (GSW) reset, quick like tcboot before it jumps to U-Boot, hold like the vendor kernel, then redo the switch setup\n"
+	   "gphy setup [rext] [adv100] - Rext trim on PHY 9 and/or advertise only 10/100 and restart autoneg (env gphysetup)");
+#endif
