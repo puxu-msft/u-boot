@@ -97,7 +97,11 @@ int arp_timeout_check(void)
 	if ((t - arp_wait_timer_start) > CONFIG_ARP_TIMEOUT) {
 		arp_wait_try++;
 
-		if (arp_wait_try >= CONFIG_NET_RETRY_COUNT) {
+		/*
+		 * 环境变量 arpretrycount 覆盖放弃的门槛，缺省 CONFIG_NET_RETRY_COUNT。arp_wait_try 从 1 起算、每过一个 CONFIG_ARP_TIMEOUT 加 1，到门槛 N 时放弃：共发 N - 1 个请求，约 (N - 1) * CONFIG_ARP_TIMEOUT 后失败。
+		 */
+		if (arp_wait_try >= env_get_ulong("arpretrycount", 10,
+						  CONFIG_NET_RETRY_COUNT)) {
 			puts("\nARP Retry count exceeded; starting again\n");
 			arp_wait_try = 0;
 			net_set_state(NETLOOP_FAIL);
