@@ -482,6 +482,7 @@ ssize_t exfat_generic_pread(const struct exfat* ef, struct exfat_node* node,
 	cluster_t cluster;
 	char* bufp = buffer;
 	off_t lsize, loffset, remainder;
+	uint32_t cluster_rem;
 
 	if (offset >= node->size)
 		return 0;
@@ -504,14 +505,15 @@ ssize_t exfat_generic_pread(const struct exfat* ef, struct exfat_node* node,
 		return MIN(size, node->size - offset);
 	}
 
-	cluster = exfat_advance_cluster(ef, node, offset / CLUSTER_SIZE(*ef->sb));
+	cluster = exfat_advance_cluster(ef, node,
+			div_u64_rem(offset, CLUSTER_SIZE(*ef->sb), &cluster_rem));
 	if (CLUSTER_INVALID(*ef->sb, cluster))
 	{
 		exfat_error("invalid cluster 0x%x while reading", cluster);
 		return -EIO;
 	}
 
-	loffset = offset % CLUSTER_SIZE(*ef->sb);
+	loffset = cluster_rem;
 	remainder = MIN(size, node->size - offset);
 	while (remainder > 0)
 	{
@@ -544,6 +546,7 @@ ssize_t exfat_generic_pwrite(struct exfat* ef, struct exfat_node* node,
 	cluster_t cluster;
 	const char* bufp = buffer;
 	off_t lsize, loffset, remainder;
+	uint32_t cluster_rem;
 
 	if (offset > node->size)
 	{
@@ -560,14 +563,15 @@ ssize_t exfat_generic_pwrite(struct exfat* ef, struct exfat_node* node,
 	if (size == 0)
 		return 0;
 
-	cluster = exfat_advance_cluster(ef, node, offset / CLUSTER_SIZE(*ef->sb));
+	cluster = exfat_advance_cluster(ef, node,
+			div_u64_rem(offset, CLUSTER_SIZE(*ef->sb), &cluster_rem));
 	if (CLUSTER_INVALID(*ef->sb, cluster))
 	{
 		exfat_error("invalid cluster 0x%x while writing", cluster);
 		return -EIO;
 	}
 
-	loffset = offset % CLUSTER_SIZE(*ef->sb);
+	loffset = cluster_rem;
 	remainder = size;
 	while (remainder > 0)
 	{

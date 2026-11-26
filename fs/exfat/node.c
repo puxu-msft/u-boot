@@ -214,6 +214,7 @@ static bool check_node(const struct exfat* ef, struct exfat_node* node,
 			(uint64_t) le32_to_cpu(ef->sb->cluster_count) * cluster_size;
 	char buffer[EXFAT_UTF8_NAME_BUFFER_MAX];
 	bool ret = true;
+	uint32_t size_rem;
 
 	/*
 	   Validate checksum first. If it's invalid all other fields probably
@@ -282,7 +283,8 @@ static bool check_node(const struct exfat* ef, struct exfat_node* node,
 	}
 
 	/* Directory size must be aligned on at cluster boundary. */
-	if ((node->attrib & EXFAT_ATTRIB_DIR) && node->size % cluster_size != 0)
+	div_u64_rem(node->size, cluster_size, &size_rem);
+	if ((node->attrib & EXFAT_ATTRIB_DIR) && size_rem != 0)
 	{
 		exfat_get_name(node, buffer);
 		exfat_error("'%s' directory size %"PRIu64" is not divisible by %d", buffer,
@@ -745,8 +747,8 @@ static int shrink_directory(struct exfat* ef, struct exfat_node* dir,
 				EXFAT_ENAME_MAX);
 	}
 
-	new_size = DIV_ROUND_UP(entries * sizeof(struct exfat_entry),
-				 CLUSTER_SIZE(*ef->sb)) * CLUSTER_SIZE(*ef->sb);
+	new_size = ROUND_UP(entries * sizeof(struct exfat_entry),
+			CLUSTER_SIZE(*ef->sb));
 	if (new_size == 0) /* directory always has at least 1 cluster */
 		new_size = CLUSTER_SIZE(*ef->sb);
 	if (new_size == dir->size)

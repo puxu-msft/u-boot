@@ -119,6 +119,7 @@ void exfat_unix2exfat(time_t unix_time, le16_t* date, le16_t* time,
 	uint16_t twosec, min, hour;
 	int days;
 	int i;
+	uint32_t sec_in_day;
 
 	/* time before exFAT epoch cannot be represented */
 	if (unix_time < shift)
@@ -126,7 +127,8 @@ void exfat_unix2exfat(time_t unix_time, le16_t* date, le16_t* time,
 
 	unix_time -= shift;
 
-	days = unix_time / SEC_IN_DAY;
+	/* unix_time 到这里已不小于 0：用 div_u64_rem，32 位目标上不引用 libgcc 的 64 位除法 */
+	days = div_u64_rem(unix_time, SEC_IN_DAY, &sec_in_day);
 	year = (4 * days) / (4 * 365 + 1);
 	days -= year * 365 + LEAP_YEARS(year);
 	month = 0;
@@ -144,9 +146,9 @@ void exfat_unix2exfat(time_t unix_time, le16_t* date, le16_t* time,
 	}
 	day = days + 1;
 
-	hour = (unix_time % SEC_IN_DAY) / SEC_IN_HOUR;
-	min = (unix_time % SEC_IN_HOUR) / SEC_IN_MIN;
-	twosec = (unix_time % SEC_IN_MIN) / 2;
+	hour = sec_in_day / SEC_IN_HOUR;
+	min = (sec_in_day % SEC_IN_HOUR) / SEC_IN_MIN;
+	twosec = (sec_in_day % SEC_IN_MIN) / 2;
 
 	*date = cpu_to_le16(day | (month << 5) | (year << 9));
 	*time = cpu_to_le16(twosec | (min << 5) | (hour << 11));

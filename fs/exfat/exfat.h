@@ -37,6 +37,10 @@
 #ifndef __UBOOT__
 #include <sys/stat.h>
 #include <sys/types.h>
+#else
+#include <div64.h>
+#include <linux/kernel.h>
+#include <linux/math64.h>
 #endif
 
 #define EXFAT_NAME_MAX 255
@@ -56,7 +60,12 @@
 #ifndef __UBOOT__
 #define DIV_ROUND_UP(x, d) (((x) + (d) - 1) / (d))
 #endif
+#ifdef __UBOOT__
+/* 32 位目标上，编译器会把 64 位 x 的 (x / d) * d 改写成 x - x % d，要用 libgcc 的 __umoddi3（32 位 MIPS 的私有 libgcc 里没有）；经 do_div 算就不会 */
+#define ROUND_UP(x, d) (DIV_ROUND_UP_ULL(x, d) * (d))
+#else
 #define ROUND_UP(x, d) (DIV_ROUND_UP(x, d) * (d))
+#endif
 
 #define BMAP_SIZE(count) (ROUND_UP(count, sizeof(bitmap_t) * 8) / 8)
 #define BMAP_BLOCK(index) ((index) / sizeof(bitmap_t) / 8)

@@ -31,6 +31,14 @@ typedef struct { uint16_t __u16; } le16_t;
 typedef struct { uint32_t __u32; } le32_t;
 typedef struct { uint64_t __u64; } le64_t;
 
+/* 有的架构（如 MIPS 的 asm/bitops.h 经 asm/byteorder.h）会引入 linux/byteorder/little_endian.h，把下面这几个名字定义成宏；exFAT 要用同名的内联函数操作自己的 le*_t 结构体，所以定义之前先撤掉这些宏。 */
+#undef le16_to_cpu
+#undef le32_to_cpu
+#undef le64_to_cpu
+#undef cpu_to_le16
+#undef cpu_to_le32
+#undef cpu_to_le64
+
 #if EXFAT_BYTE_ORDER == EXFAT_LITTLE_ENDIAN
 
 static inline uint16_t le16_to_cpu(le16_t v) { return v.__u16; }

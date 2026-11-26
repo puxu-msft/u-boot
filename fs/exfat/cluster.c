@@ -373,13 +373,14 @@ static int erase_range(struct exfat* ef, struct exfat_node* node,
 {
 	uint64_t cluster_boundary;
 	cluster_t cluster;
+	uint32_t begin_rem;
 
 	if (begin >= end)
 		return 0;
 
 	cluster_boundary = (begin | (CLUSTER_SIZE(*ef->sb) - 1)) + 1;
 	cluster = exfat_advance_cluster(ef, node,
-			begin / CLUSTER_SIZE(*ef->sb));
+			div_u64_rem(begin, CLUSTER_SIZE(*ef->sb), &begin_rem));
 	if (CLUSTER_INVALID(*ef->sb, cluster))
 	{
 		exfat_error("invalid cluster 0x%x while erasing", cluster);
@@ -387,7 +388,7 @@ static int erase_range(struct exfat* ef, struct exfat_node* node,
 	}
 	/* erase from the beginning to the closest cluster boundary */
 	if (!erase_raw(ef, MIN(cluster_boundary, end) - begin,
-			exfat_c2o(ef, cluster) + begin % CLUSTER_SIZE(*ef->sb)))
+			exfat_c2o(ef, cluster) + begin_rem))
 		return -EIO;
 	/* erase whole clusters */
 	while (cluster_boundary < end)
