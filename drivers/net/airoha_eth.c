@@ -445,6 +445,8 @@ struct airoha_eth {
 	struct udevice *switch_mdio_dev;
 	/* EN751221：等链路超时的用户口，之后的 start 不再等它们，直到它们的链路起来 */
 	u32 link_wait_timedout;
+	/* EN751221：“必须有链路”模式（ethlinkrequired）上一次等到上限也没有任何用户口有链路；看到任一口链路起来之前，之后的 start 不再等、直接报 -ENOLINK */
+	bool link_required_timedout;
 	/* EN751221：U-Boot 经哪些交换芯片用户口收发（位 = 端口号），见 airoha_switch_user_ports() */
 	u32 user_ports;
 
@@ -1616,30 +1618,35 @@ static int airoha_eth_port_probe(struct udevice *dev)
 
 /*
  * 开始收发前，等正在与对端自协商的用户口把链路建起来：SoC 复位或对端重启之后 GPHY 要重新协商，这期间发出的帧都丢了，网络层要过 CONFIG_ARP_TIMEOUT 才重发 ARP。
- * 只等有对端的口：MAC 链路（PMSR，交换芯片轮询 PHY 得来）已经起来的口不等；MII_EXPANSION 的 EXPANSION_NWAY 为 0 的口没有正在协商的对端（没插线、对端关机），也不等，所以不插线不增加启动时间。GS2107 实测 GPHY 断电再上电后约 1.6 s 收到对端的协商码字、EXPANSION_NWAY 置位，约 3.1 s 链路起来；对端重新开始协商较慢时码字到得更晚（同一主机网卡另几次断电后 10 s 以上才重新连上，2–3 s 时码字还没到）。码字到达之前看不出有没有对端，那段时间里发出的 ARP 靠网络层重发（ARP 没应答时每 5 s 重发、约 20 s 放弃）。
+ * 只等有对端的口：MAC 链路（PMSR，交换芯片轮询 PHY 得来）已经起来的口不等；MII_EXPANSION 的 EXPANSION_NWAY 为 0 的口没有正在协商的对端（没插线、对端关机），也不等，所以不插线不增加启动时间。GS2107 实测 GPHY 断电再上电后约 1.6 s 收到对端的协商码字、EXPANSION_NWAY 置位，约 3.1 s 链路起来；对端重新开始协商较慢时码字到得更晚（同一主机网卡另几次断电后 10 s 以上才重新连上，2–3 s 时码字还没到）。码字到达之前看不出有没有对端，那段时间里发出的 ARP 靠网络层重发（每 CONFIG_ARP_TIMEOUT 一次，到 CONFIG_NET_RETRY_COUNT 或环境变量 arpretrycount 放弃）。
  * 上限与 phylib 等自协商相同（phy_aneg_timeout 环境变量，缺省 CONFIG_PHY_ANEG_TIMEOUT），Ctrl-C 可中断；超时（或被中断）的口记下来，之后的 start 不再等它，直到它的链路起来，免得协商不成的口让每次 start（含 netconsole 每次发送）都等满上限。结果只打印到串口：eth start 期间 netconsole 发不出去。
+ * 环境变量 ethlinkrequired 为真（y、1、t）时是“必须有链路”模式，给网络启动探测用：除了上面的等待，还要等到至少一个用户口的 MAC 链路起来（对端还没开始发协商码字、EXPANSION_NWAY 为 0 时也等），上限同样是 phy_aneg_timeout；到上限仍没有一个口有链路就返回 -ENOLINK，start 失败、tftpboot 随即失败（eth_init 把 start 的错误码交回 net_loop），探测据此跳过网络一级，不再为没插线、对端不在耗满 ARP 超时。这次超时之后、看到任一口链路起来之前，后续 start 只等正在协商的口、不再为“必须有链路”等满上限。不设这个变量时行为同上一段。
+ * 每次等待的毫秒数写进运行期变量 ethlinkwaitms（只在内存里），供网络取到的启动脚本经 netconsole 打出来、实测链路等待。
  */
-static void en751221_wait_link(struct udevice *dev, struct airoha_eth *eth)
+static int en751221_wait_link(struct udevice *dev, struct airoha_eth *eth)
 {
 	struct udevice *mdio = eth->switch_mdio_dev;
-	ulong timeout, start;
-	u32 waiting, waited = 0;
-	bool interrupted = false;
+	ulong timeout, start, elapsed;
+	u32 waiting, waited = 0, up;
+	bool interrupted = false, required;
 	int port, exp;
 
 	if (!mdio)
-		return;
+		return 0;
 
+	required = env_get_yesno("ethlinkrequired") == 1;
 	timeout = env_get_ulong("phy_aneg_timeout", 10, CONFIG_PHY_ANEG_TIMEOUT);
 	start = get_timer(0);
 	for (;;) {
 		waiting = 0;
+		up = 0;
 		for (port = 1; port <= 4; port++) {
 			/* U-Boot 不用的口（如 WAN）不等 */
 			if (!(eth->user_ports & BIT(port)))
 				continue;
 			if (airoha_switch_rr(eth, SWITCH_PMSR(port)) & SWITCH_PMSR_LINK) {
 				eth->link_wait_timedout &= ~BIT(port);
+				up |= BIT(port);
 				continue;
 			}
 			if (eth->link_wait_timedout & BIT(port))
@@ -1650,8 +1657,12 @@ static void en751221_wait_link(struct udevice *dev, struct airoha_eth *eth)
 			if (exp > 0 && exp != 0xffff && (exp & EXPANSION_NWAY))
 				waiting |= BIT(port);
 		}
+		if (up)
+			eth->link_required_timedout = false;
 		waited |= waiting;
-		if (!waiting || get_timer(start) > timeout)
+		if (!waiting && (up || !required || eth->link_required_timedout))
+			break;
+		if (get_timer(start) > timeout)
 			break;
 		if (ctrlc()) {
 			interrupted = true;
@@ -1659,16 +1670,28 @@ static void en751221_wait_link(struct udevice *dev, struct airoha_eth *eth)
 		}
 		mdelay(10);
 	}
+	elapsed = get_timer(start);
+	env_set_ulong("ethlinkwaitms", elapsed);
 
 	if (waiting) {
 		eth->link_wait_timedout |= waiting;
 		printf("%s: ports 0x%x still negotiating after %lu ms%s\n",
-		       dev->name, waiting, get_timer(start),
+		       dev->name, waiting, elapsed,
 		       interrupted ? " (interrupted)" : "");
 	} else if (waited) {
 		printf("%s: link up on ports 0x%x after %lu ms\n",
-		       dev->name, waited, get_timer(start));
+		       dev->name, waited, elapsed);
 	}
+
+	if (required && !up) {
+		if (!eth->link_required_timedout)
+			printf("%s: no link on any port after %lu ms%s\n",
+			       dev->name, elapsed,
+			       interrupted ? " (interrupted)" : "");
+		eth->link_required_timedout = true;
+		return -ENOLINK;
+	}
+	return 0;
 }
 
 static int airoha_eth_init(struct udevice *dev)
@@ -1687,8 +1710,12 @@ static int airoha_eth_init(struct udevice *dev)
 		airoha_qdma_init_rx_desc(q);
 	if (airoha_is_en751221(qdma->eth))
 		en751221_qdma_reset_tx(qdma);
-	if (airoha_is_en751221(qdma->eth))
-		en751221_wait_link(dev, qdma->eth);
+	if (airoha_is_en751221(qdma->eth)) {
+		int ret = en751221_wait_link(dev, qdma->eth);
+
+		if (ret)
+			return ret;
+	}
 
 	airoha_qdma_set(qdma, REG_QDMA_GLOBAL_CFG,
 			GLOBAL_CFG_TX_DMA_EN_MASK |
