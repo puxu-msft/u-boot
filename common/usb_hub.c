@@ -438,7 +438,7 @@ int usb_hub_port_connect_change(struct usb_device *dev, int port)
 	return ret;
 }
 
-static int usb_scan_port(struct usb_device_scan *usb_scan)
+static int usb_scan_port(struct usb_device_scan *usb_scan, ulong now)
 {
 	ALLOC_CACHE_ALIGN_BUFFER(struct usb_port_status, portsts, 1);
 	unsigned short portstatus;
@@ -456,13 +456,13 @@ static int usb_scan_port(struct usb_device_scan *usb_scan)
 	 * Don't talk to the device before the query delay is expired.
 	 * This is needed for voltages to stabalize.
 	 */
-	if (get_timer(0) < hub->query_delay)
+	if (now < hub->query_delay)
 		return 0;
 
 	ret = usb_get_port_status(dev, i + 1, portsts);
 	if (ret < 0) {
 		debug("get_port_status failed\n");
-		if (get_timer(0) >= hub->connect_timeout) {
+		if (now >= hub->connect_timeout) {
 			debug("devnum=%d port=%d: timeout\n",
 			      dev->devnum, i + 1);
 			/* Remove this device from scanning list */
@@ -486,7 +486,7 @@ static int usb_scan_port(struct usb_device_scan *usb_scan)
 	 */
 	if (!(portchange & USB_PORT_STAT_C_CONNECTION) &&
 	    !(portstatus & USB_PORT_STAT_CONNECTION)) {
-		if (get_timer(0) >= hub->connect_timeout) {
+		if (now >= hub->connect_timeout) {
 			debug("devnum=%d port=%d: timeout\n",
 			      dev->devnum, i + 1);
 			/* Remove this device from scanning list */
@@ -580,15 +580,19 @@ static int usb_device_list_scan(void)
 	running = 1;
 
 	while (1) {
+		ulong now;
+
 		/* We're done, once the list is empty again */
 		if (list_empty(&usb_scan_list))
 			goto out;
 
+		/* 每一轮只取一次时间，这一轮里各端口按同一时刻判断等待期与超时：各自取时间的话，等待期恰在查完端口 1、还没查端口 2 之间到点时端口 2 先于端口 1 枚举、拿到靠前的设备号，开机时已接好的设备编号就随时序而变 */
+		now = get_timer(0);
 		list_for_each_entry_safe(usb_scan, tmp, &usb_scan_list, list) {
 			int ret;
 
 			/* Scan this port */
-			ret = usb_scan_port(usb_scan);
+			ret = usb_scan_port(usb_scan, now);
 			if (ret)
 				goto out;
 		}
