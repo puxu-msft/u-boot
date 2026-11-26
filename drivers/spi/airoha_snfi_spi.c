@@ -210,10 +210,8 @@
 #define SNAND_FIFO_TX_BUSWIDTH_SINGLE		0x08
 #define SNAND_FIFO_TX_BUSWIDTH_DUAL		0x09
 #define SNAND_FIFO_TX_BUSWIDTH_QUAD		0x0a
-/* EN7528 手动模式的总线换向（TX 后转入 RX）与读 ID 收尾操作码，随 Linux 侧 029-16 移植 */
-#define SNAND_FIFO_TX_CMD_TA			0x10
+/* 0x11 是原厂的 OS2ID：单线发、随后转入双线收（原厂 newspiflash.h:146-148，OS2IS/OS2ID/OS2IQ = 0x10/0x11/0x12，单线发 → 单/双/四线收）。原厂 spi_nand 体系里，单线读缓存的列地址末字节或哑元用 OS2IS、双线读缓存的哑元用 OS2ID（spi_nand_flash.c:1467-1512），只有 get_feature 在单线读之前用 0x11（:746），读 ID 的地址字节用普通单线发送（:876）。本驱动在 1 线地址或哑元段之后紧跟读数据时，段内最后一个字节一律用 0x11：get_feature 与原厂相同；读 ID（命令 + 地址）与原厂不同，读回 bcb2bcb2bc；单线读缓存只在不走 DMA 时用到（EN751221 一族没有 NFI，读页全走这条），EN7528 上没跑过 */
 #define SNAND_FIFO_TX_ADDR_TA			0x11
-#define SNAND_FIFO_OP_TERMINATOR		0x02
 #define SNAND_FIFO_RX_BUSWIDTH_SINGLE		0x0c
 #define SNAND_FIFO_RX_BUSWIDTH_DUAL		0x0e
 #define SNAND_FIFO_RX_BUSWIDTH_QUAD		0x0f
@@ -407,11 +405,7 @@ static int airoha_snand_read_data_from_fifo(struct airoha_snand_priv *priv,
 		int err;
 		u32 val;
 
-		/* 1. wait until the whole DFIFO status register reads 0.
-		 * Checking only bit0 passes while the transfer is still in
-		 * flight (bit0 is usually 0 then), so the read returns a
-		 * premature byte. The kernel driver carries the same fix.
-		 */
+		/* 1. 等 DFIFO 状态寄存器整体读回 0 再取字节，与原厂 SPI_CONTROLLER_Read_NByte 相同（vmlinux 0x802d7718 起的 lw 0x3c / bnez 循环）；11-08 debug 日志里它在空闲时也读 0，不能拿来判断 FIFO 里有没有残留字节 */
 		err = regmap_read_poll_timeout(priv->regmap_ctrl,
 					       REG_SPI_CTRL_DFIFO_EMPTY, val,
 					       !val,
@@ -1182,27 +1176,13 @@ static int airoha_snand_write_data_ta(struct airoha_snand_priv *priv,
 	return 0;
 }
 
-static void airoha_snand_drain_dfifo(struct airoha_snand_priv *priv)
-{
-	int i;
-	u32 val;
-
-	for (i = 0; i < 256; i++) {
-		regmap_read(priv->regmap_ctrl, REG_SPI_CTRL_DFIFO_EMPTY, &val);
-		if (val & SPI_CTRL_DFIFO_EMPTY)
-			return;
-		regmap_read(priv->regmap_ctrl, REG_SPI_CTRL_DFIFO_RDATA, &val);
-		regmap_write(priv->regmap_ctrl, REG_SPI_CTRL_DFIFO_RD, SPI_CTRL_DFIFO_RD);
-	}
-}
-
 static int airoha_snand_exec_op(struct spi_slave *slave,
 				const struct spi_mem_op *op)
 {
 	struct udevice *bus = slave->dev->parent;
 	struct airoha_snand_priv *priv;
 	int op_len, addr_len, dummy_len;
-	bool rx_after, id_read;
+	bool rx_after;
 	u8 buf[20], *data;
 	int i, err;
 
@@ -1223,40 +1203,22 @@ static int airoha_snand_exec_op(struct spi_slave *slave,
 	for (i = 0; i < dummy_len; i++)
 		*data++ = 0xff;
 
-	/* 后面要收数据的操作，TX 的最后一个字节用换向操作码发；只有操作码、没有地址与 dummy 的读（读 ID）走专用序列 */
+	/* 后面要收数据时，1 线地址或 dummy 段的最后一个字节用 SNAND_FIFO_TX_ADDR_TA 发 */
 	rx_after = op->data.nbytes > 0 && op->data.dir == SPI_MEM_DATA_IN;
-	id_read = rx_after && !addr_len && !dummy_len;
 
 	/* switch to manual mode */
 	err = airoha_snand_set_mode(priv, SPI_MODE_MANUAL);
 	if (err < 0)
 		return err;
 
-	airoha_snand_drain_dfifo(priv);
-
-	/* 片选拉低之后的任何失败都经 out_cs_high 释放片选 */
-	if (id_read) {
-		err = airoha_snand_set_cs(priv, SPI_CHIP_SEL_LOW);
-		if (err < 0)
-			goto out_cs_high;
-	}
-
+	/* 片选拉低之后的任何失败都经 out_cs_high 释放片选。EN7528 原厂每个 op 片选拉低、拉高各提交一个 op（vmlinux 0x802d7790、0x802d77b4），这里也各调一次 set_cs；EN751221 一族的 set_cs 自己连发两次（见 airoha_snand_set_cs） */
 	err = airoha_snand_set_cs(priv, SPI_CHIP_SEL_LOW);
 	if (err < 0)
 		goto out_cs_high;
 
 	/* opcode */
 	data = buf;
-	if (id_read) {
-		err = airoha_snand_set_fifo_op(priv, SNAND_FIFO_TX_CMD_TA,
-					       op_len);
-		if (err)
-			goto out_cs_high;
-		err = airoha_snand_write_data_to_fifo(priv, data, op_len);
-	} else {
-		err = airoha_snand_write_data(priv, data, op_len,
-					      op->cmd.buswidth);
-	}
+	err = airoha_snand_write_data(priv, data, op_len, op->cmd.buswidth);
 	if (err)
 		goto out_cs_high;
 
@@ -1304,11 +1266,6 @@ out_cs_high:
 	 */
 	if (airoha_snand_set_cs(priv, SPI_CHIP_SEL_HIGH) && !err)
 		err = -EIO;
-
-	/* 读 ID 的收尾操作只在整个序列成功时发 */
-	if (!err && id_read)
-		err = airoha_snand_set_fifo_op(priv, SNAND_FIFO_OP_TERMINATOR,
-					       5);
 
 	return err;
 }
