@@ -20,7 +20,9 @@
 /* 状态寄存器 C0H 的 ECCS1:ECCS0（bit5:4）：00 无错；01 已纠正、位数低于纠错上限；10 不可纠；11 已纠正、位数等于纠错上限。同家族 Etron 手册没有列出读纠正位数的寄存器，只能按档报。原厂驱动只判 10（(status & 0x30) == 0x20）。解码与 Linux 驱动相同。 */
 #define BWET_STATUS_ECC_MAX_BITFLIPS (3 << 4)
 
+/* 读缓存有双线 0x3B（地址单线、1 个哑元字节、数据双线，即原厂芯片表的 read_mode = DUAL、dummy_mode = APPEND）与单线两种；spinand 核心逐个变体核控制器是否支持、算整页传输时长，取最快的（spinand_select_op_variant），设备树没给 rx 双线或控制器不支持时落到单线。 */
 static SPINAND_OP_VARIANTS(read_cache_variants,
+		SPINAND_PAGE_READ_FROM_CACHE_1S_1S_2S_OP(0, 1, NULL, 0, 0),
 		SPINAND_PAGE_READ_FROM_CACHE_1S_1S_1S_OP(0, 1, NULL, 0, 0),
 		SPINAND_PAGE_READ_FROM_CACHE_FAST_1S_1S_1S_OP(0, 1, NULL, 0, 0));
 
