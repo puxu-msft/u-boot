@@ -1154,6 +1154,13 @@ dhcp_got_bootp:
 			dhcp_packet_process_options(bp);
 			/* Store net params from reply */
 			store_net_params(bp);
+			/* 把 DHCP 服务器标识（option 54）导出成 env 的 dhcpserverip：dnsmasq 不配 next-server 时把 siaddr 填成它自己的接口地址（dnsmasq 2.93 src/rfc2131.c do_options：mess->siaddr = context->local），只看 serverip 分不出“应答指了 TFTP 服务器”与“只是 DHCP 服务器自己”，板级 env 拿两者比。 */
+			if (dhcp_server_ip.s_addr) {
+				char sid[16];
+
+				ip_to_string(dhcp_server_ip, sid);
+				env_set("dhcpserverip", sid);
+			}
 			dhcp_state = BOUND;
 			printf("DHCP client bound to address %pI4 (%lu ms)\n",
 			       &net_ip, get_timer(bootp_start));
