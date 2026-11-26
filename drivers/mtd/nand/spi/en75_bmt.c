@@ -310,6 +310,8 @@ static int try_parse_bmt(struct bmt_table *out, const u8 *buf, int len)
  * Walk down from the last block until REQUIRED_GOOD_BLOCKS good ones have been
  * seen; that boundary is where the reserve pool starts. The BBT and BMT are
  * found by signature+checksum along the way, not at fixed addresses.
+ *
+ * 数池大小时坏块按原厂口径只看 page0 的 spare[0]、不看读状态（原厂内核 calc_bmt_pool_size 0x802d3c10、tcboot 0x87fd50f0 以 BAD_BLOCK_RAW 调坏块检查，检查函数不看页读的返回值）：spare[1] 非 FF（原厂给池内坏块打的标记）或读失败的块照样计入池大小，只是不在上面找表。这样池底与 tcboot、Linux 的 en75_bmt 相同，mtd->size 也相同。
  */
 static int scan_reserve(void)
 {
@@ -325,17 +327,22 @@ static int scan_reserve(void)
 		int i;
 
 		for (i = 0; i < INITIAL_READ_TRIES; i++) {
+			/* 传输失败时 fdm 可能没被填：按擦除态起步 */
+			memset(fdm, 0xff, sizeof(fdm));
 			ret = bbt_nand_read(blk_pg(cursor), bmtd.data_buf,
 					    bmtd.pg_size, fdm, sizeof(fdm));
 			if (!ret)
 				break;
 		}
 
+		/* -EBADMSG 时 spinand 照常把片内缓存读出的字节填进 fdm，与原厂看到的同一份 */
+		if (fdm[0] == 0xff)
+			good_blocks++;
+
 		if (ret || fdm_is_bad(fdm)) {
 			pr_info("%s: skipping bad block %d in reserve area\n",
 				LOG_PFX, cursor);
 		} else {
-			good_blocks++;
 			if (!found_bbt &&
 			    !try_parse_bbt(&bmtd.bbt, bmtd.data_buf,
 					   bmtd.pg_size, bmtd.bbt_table_size)) {
