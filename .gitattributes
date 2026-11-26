@@ -6,3 +6,5 @@
 *.ttf binary
 *.gz binary
 *.png binary
+# 设备树源码按文本比对与合并：用户级 attributes 可能把 *.dts 标成 binary（如影音扩展名表），diff、format-patch 与合并都会坏；上面的 * text eol=lf 已管换行，这里只补 diff 与 merge
+*.dts diff merge
