@@ -873,7 +873,8 @@ static int cmd_test_redline_erase_group(struct unit_test_state *uts)
 }
 CMD_TEST(cmd_test_redline_erase_group, UTF_CONSOLE);
 
-#define SMC_ALLOWED	"  allowed : PSCI SYSTEM_RESET 0x84000009, Amlogic set reboot reason 0x82000049, PSCI_VERSION, PSCI_FEATURES, SMCCC_VERSION, SMCCC_ARCH_FEATURES, Amlogic secure storage read-only calls 0x82000023-0x82000027, 0x82000060/61/63/64/65/67/6b/6c"
+#define SMC_ALLOWED	"  allowed : PSCI SYSTEM_RESET 0x84000009 and Amlogic set reboot reason 0x82000049 (not with reboot reason 9), PSCI_VERSION, PSCI_FEATURES, SMCCC_VERSION, SMCCC_ARCH_FEATURES, Amlogic secure storage read-only calls 0x82000023-0x82000027, 0x82000060/61/63/64/65/67/6b/6c"
+#define RPMBP_IRREV	"  IRREVERSIBLE: reboot reason 9 (rpmbp): on the next eMMC boot the vendor BL2 programs the RPMB authentication key if it cannot read the RPMB write counter; an RPMB key can be programmed only once"
 
 /* 伪造命令表项 @name 直接过红线门：放行时返回 0、不打印、不动待确认动作 */
 static int expect_gate_passes(struct unit_test_state *uts, const char *name,
@@ -901,13 +902,19 @@ static int expect_gate_holds(struct unit_test_state *uts, const char *name,
 }
 
 /*
- * smc/hvc 的 fid 白名单（sandbox 没有这两条命令：按命令表规范名直接调 redline_gate()）：m12.env 的 smc 0x84000009 ${m12_fallback_reason}（含变量为空）与 smc 0x82000049 0、PSCI/SMCCC 查询放行；eFuse 写 0x82000031 拦、标不可逆并逐字节列出安全监控输入共享缓冲里要烧的数据（取不到缓冲时注明、x2 超过 4 KiB 时只列前 4 KiB）；高 32 位不为 0、未知 fid 拦
+ * smc/hvc 的 fid 白名单（sandbox 没有这两条命令：按命令表规范名直接调 redline_gate()）：m12.env 的 smc 0x84000009 ${m12_fallback_reason}（含变量为空）与 smc 0x82000049 0、PSCI/SMCCC 查询放行；带重启原因 9（rpmbp）的这两个调用拦、标不可逆；eFuse 写 0x82000031 拦、标不可逆并逐字节列出安全监控输入共享缓冲里要烧的数据（取不到缓冲时注明、x2 超过 4 KiB 时只列前 4 KiB）；高 32 位不为 0、未知 fid 拦
  */
 static int cmd_test_redline_smc(struct unit_test_state *uts)
 {
 	char *reset[] = { "smc", "0x84000009", "3" };
 	char *reset_empty[] = { "smc", "0x84000009" };
 	char *reason[] = { "smc", "0x82000049", "0" };
+	char *reset_zero[] = { "smc", "0x84000009", "0" };
+	char *reason_two[] = { "smc", "0x82000049", "2" };
+	char *reset_rpmbp[] = { "smc", "0x84000009", "9" };
+	char *reset_rpmbp_hi[] = { "smc", "0x84000009", "0x19" };
+	char *reason_rpmbp[] = { "smc", "0x82000049", "9" };
+	char *reason_eight[] = { "smc", "0x82000049", "8" };
 	char *version[] = { "smc", "84000000" };
 	char *features[] = { "smc", "0x8400000a", "0x84000009" };
 	char *smccc[] = { "smc", "0x80000000" };
@@ -933,6 +940,9 @@ static int cmd_test_redline_smc(struct unit_test_state *uts)
 	ut_assertok(expect_gate_passes(uts, "smc", 3, reset));
 	ut_assertok(expect_gate_passes(uts, "smc", 2, reset_empty));
 	ut_assertok(expect_gate_passes(uts, "smc", 3, reason));
+	ut_assertok(expect_gate_passes(uts, "smc", 3, reset_zero));
+	ut_assertok(expect_gate_passes(uts, "smc", 3, reason_two));
+	ut_assertok(expect_gate_passes(uts, "smc", 3, reason_eight));
 	ut_assertok(expect_gate_passes(uts, "smc", 2, version));
 	ut_assertok(expect_gate_passes(uts, "smc", 3, features));
 	ut_assertok(expect_gate_passes(uts, "smc", 2, smccc));
@@ -975,6 +985,28 @@ static int cmd_test_redline_smc(struct unit_test_state *uts)
 	ut_assert_nextline("  IRREVERSIBLE: eFuse bits are one-time programmable");
 	rl_sm_buf = 0;
 	free(shm);
+
+	/* 重启原因 9（rpmbp）：厂商 BL2 下次从 eMMC 启动时可能永久写入 RPMB 认证密钥；两个调用都按 x1 的低 4 位判（0x19 也拦，8 照放） */
+	ut_assertok(expect_gate_holds(uts, "smc", 3, reset_rpmbp));
+	ut_assert_nextline("  command : smc 0x84000009 9");
+	ut_assert_nextline("  action  : secure monitor call (smc), function ID 0x84000009");
+	ut_assert_nextline("  function: W0 0x84000009 = PSCI SYSTEM_RESET");
+	ut_assert_nextline("  args    : x1 0x9, x2 0x0, x3 0x0, x4 0x0, x5 0x0, x6 0x0, w7 0x0");
+	ut_assert_nextline(SMC_ALLOWED);
+	ut_assert_nextline(RPMBP_IRREV);
+	ut_assert_nextline(HINT);
+	ut_assert_console_end();
+	ut_assertok(expect_gate_holds(uts, "smc", 3, reset_rpmbp_hi));
+	ut_assert_skip_to_line("  args    : x1 0x19, x2 0x0, x3 0x0, x4 0x0, x5 0x0, x6 0x0, w7 0x0");
+	ut_assert_nextline(SMC_ALLOWED);
+	ut_assert_nextline(RPMBP_IRREV);
+	ut_assertok(expect_gate_holds(uts, "smc", 3, reason_rpmbp));
+	ut_assert_skip_to_line("  function: W0 0x82000049 = Amlogic SiP: set reboot reason");
+	ut_assert_nextline("  args    : x1 0x9, x2 0x0, x3 0x0, x4 0x0, x5 0x0, x6 0x0, w7 0x0");
+	ut_assert_nextline(SMC_ALLOWED);
+	ut_assert_nextline(RPMBP_IRREV);
+	ut_assert_nextline(HINT);
+	ut_assert_console_end();
 
 	ut_assertok(expect_gate_holds(uts, "smc", 3, wide));
 	ut_assert_nextline("  command : smc 0x184000009 3");

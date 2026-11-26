@@ -828,6 +828,20 @@ static const struct rl_fid smc_known[] = {
 
 #define RL_SMC_SHMEM_IN		0x82000020
 #define RL_SMC_EFUSE_WRITE	0x82000031
+#define RL_SMC_SYSTEM_RESET	0x84000009
+#define RL_SMC_SET_REASON	0x82000049
+#define RL_REASON_RPMBP		0x9
+
+/*
+ * 重启原因 9（rpmbp）：厂商 BL2 在下一次从 eMMC 启动时，读 RPMB 写计数器失败就把由 eFuse [0x40, 0x50) 与 eMMC CID 派生的认证密钥写进 RPMB（M12 docs/16 §2.5，厂商 BL2 反汇编），而 RPMB 的认证密钥只能编程一次。
+ * 原因落在 AO_RTI_STATUS_REG3[3:0]，两个调用在两种 BL31 下都等于 x1 的低 4 位：SYSTEM_RESET 只写 x1 的低 4 位；0x82000049 厂商 BL31 先清 REG3[3:0] 再把 x1 或进去（M12 厂商 BL31 0x5119e94–0x5119eb4），自维护 TF-A 只写 [3:0]。
+ * 这两个调用平时放行（m12.env 只用原因 0 与 3），带原因 9 时改为要确认，清单标不可逆（用户 2026-11-26 定：拦下原因 9）
+ */
+static bool rl_smc_rpmbp(ulong fid, ulong x1)
+{
+	return ((u32)fid == RL_SMC_SYSTEM_RESET || (u32)fid == RL_SMC_SET_REASON) &&
+	       (x1 & 0xf) == RL_REASON_RPMBP;
+}
 
 /*
  * Amlogic 安全监控输入共享缓冲的地址：smc 0x82000020 只返回地址（drivers/sm/meson-sm.c 的 meson_sm_probe() 同样这样取）；取不到时为 0。
@@ -884,16 +898,18 @@ static bool rl_smc(struct rl_text *t, const char *name, int argc,
 {
 	ulong fid, a[7];
 	const char *what;
+	bool rpmbp;
 	int i;
 
 	if (argc < 2)
 		return false;	/* 只打印用法 */
 	fid = hextoul(argv[1], NULL);
-	for (i = 0; i < ARRAY_SIZE(smc_allowed); i++)
-		if (fid == smc_allowed[i].fid)
-			return false;
 	for (i = 0; i < ARRAY_SIZE(a); i++)
 		a[i] = argc > i + 2 ? hextoul(argv[i + 2], NULL) : 0;
+	rpmbp = rl_smc_rpmbp(fid, a[0]);
+	for (i = 0; !rpmbp && i < ARRAY_SIZE(smc_allowed); i++)
+		if (fid == smc_allowed[i].fid)
+			return false;
 	what = rl_fid_name(smc_known, ARRAY_SIZE(smc_known), fid);
 	if (!what)
 		what = rl_fid_name(smc_allowed, ARRAY_SIZE(smc_allowed), fid);
@@ -906,11 +922,13 @@ static bool rl_smc(struct rl_text *t, const char *name, int argc,
 		rl_printf(t, "  function: W0 0x%08x = %s\n", (u32)fid, what);
 	rl_printf(t, "  args    : x1 0x%lx, x2 0x%lx, x3 0x%lx, x4 0x%lx, x5 0x%lx, x6 0x%lx, w7 0x%lx\n",
 		  a[0], a[1], a[2], a[3], a[4], a[5], a[6]);
-	rl_puts(t, "  allowed : PSCI SYSTEM_RESET 0x84000009, Amlogic set reboot reason 0x82000049, PSCI_VERSION, PSCI_FEATURES, SMCCC_VERSION, SMCCC_ARCH_FEATURES, Amlogic secure storage read-only calls 0x82000023-0x82000027, 0x82000060/61/63/64/65/67/6b/6c\n");
+	rl_puts(t, "  allowed : PSCI SYSTEM_RESET 0x84000009 and Amlogic set reboot reason 0x82000049 (not with reboot reason 9), PSCI_VERSION, PSCI_FEATURES, SMCCC_VERSION, SMCCC_ARCH_FEATURES, Amlogic secure storage read-only calls 0x82000023-0x82000027, 0x82000060/61/63/64/65/67/6b/6c\n");
 	if ((u32)fid == RL_SMC_EFUSE_WRITE) {
 		rl_smc_efuse(t, a[0], a[1]);
 		rl_puts(t, "  IRREVERSIBLE: eFuse bits are one-time programmable\n");
 	}
+	if (rpmbp)
+		rl_puts(t, "  IRREVERSIBLE: reboot reason 9 (rpmbp): on the next eMMC boot the vendor BL2 programs the RPMB authentication key if it cannot read the RPMB write counter; an RPMB key can be programmed only once\n");
 
 	return true;
 }
