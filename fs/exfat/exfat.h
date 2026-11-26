@@ -150,10 +150,11 @@ extern int exfat_errors;
 extern int exfat_errors_fixed;
 
 #ifdef __UBOOT__
-#define exfat_bug(fmt, args...)		log_crit(fmt, ##args)
-#define exfat_error(fmt, args...)	log_err(fmt, ##args)
-#define exfat_warn(fmt, args...)	log_warning(fmt, ##args)
-#define exfat_debug(fmt, args...)	log_debug(fmt, ##args)
+/* libexfat 的消息串不带换行，上游 libexfat/log.c 打完消息再补 ".\n"；这里交给 log_* 时同样补上换行，否则下一行输出接在消息后面 */
+#define exfat_bug(fmt, args...)		log_crit(fmt "\n", ##args)
+#define exfat_error(fmt, args...)	log_err(fmt "\n", ##args)
+#define exfat_warn(fmt, args...)	log_warning(fmt "\n", ##args)
+#define exfat_debug(fmt, args...)	log_debug(fmt "\n", ##args)
 #else
 void exfat_bug(const char* format, ...) PRINTF NORETURN;
 void exfat_error(const char* format, ...) PRINTF;
