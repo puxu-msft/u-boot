@@ -348,10 +348,9 @@ int eth_init(void)
 		if (current) {
 			debug("Trying %s\n", current->name);
 
+			/* start 失败时返回它自己的错误码：eth_errno 只记 eth_get_dev() 里探测的结果，探测成功后是 0，拿它顶替会让 eth_init() 在设备没起来时报成功，调用方（net_loop）接着在不活动的设备上收发，直到各协议超时 */
 			ret = eth_start_udev(current);
-			if (ret < 0)
-				ret = eth_errno;
-			else
+			if (ret >= 0)
 				break;
 
 			debug("FAIL\n");
