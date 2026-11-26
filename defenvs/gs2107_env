@@ -17,9 +17,11 @@ bootargs_base=console=ttyS0,115200
 bootcmd=run gs_boot
 altbootcmd=run gs_fallback
 gs_boot=if test "${recovery}" = "1"; then run gs_recovery; else run gs_usb_boot; run gs_net_boot; run gs_nand_boot; run gs_recovery; fi
-gs_net_boot=setenv ipaddr 192.168.21.7; setenv netmask 255.255.255.0; setenv gatewayip 192.168.21.1; setenv serverip 192.168.21.2; setenv tftpdstp 6969; setenv autoload no; setenv ncip 192.168.21.2; setenv ncoutport 6666; setenv tftptimeout 1000; setenv tftptimeoutcountmax 2; if tftpboot ${loadaddr} ${serverip}:${bootfile}; then setenv gs_stdout ${stdout}; setenv stdout ${gs_stdout},nc; setenv stderr ${gs_stdout},nc; setenv tftptimeout 5000; setenv tftptimeoutcountmax 10; source ${loadaddr}; setenv stdout ${gs_stdout}; setenv stderr ${gs_stdout}; setenv gs_stdout; fi; setenv tftptimeout 5000; setenv tftptimeoutcountmax 10
+gs_net_boot=setenv ipaddr 192.168.21.7; setenv netmask 255.255.255.0; setenv gatewayip 192.168.21.1; setenv serverip 192.168.21.2; setenv tftpdstp 6969; setenv autoload no; setenv ncip 192.168.21.2; setenv ncoutport 6666; setenv tftptimeout 1000; setenv tftptimeoutcountmax ${gs_probe_timeouts}; if tftpboot ${loadaddr} ${serverip}:${bootfile}; then setenv gs_net_fetched 1; setenv gs_stdout ${stdout}; setenv stdout ${gs_stdout},nc; setenv stderr ${gs_stdout},nc; setenv tftptimeout 5000; setenv tftptimeoutcountmax 10; source ${loadaddr}; setenv stdout ${gs_stdout}; setenv stderr ${gs_stdout}; setenv gs_stdout; fi; setenv tftptimeout 5000; setenv tftptimeoutcountmax 10
+gs_probe_timeouts=2
+gs_net_rescue=setenv gs_probe_timeouts 15; setenv gs_net_fetched 0; run gs_net_retry; run gs_net_retry; run gs_net_retry; run gs_net_retry; setenv gs_probe_timeouts 2
+gs_net_retry=if test "${gs_net_fetched}" = "0"; then run gs_net_boot; fi
 gs_usb_boot=usb start; if fatload usb 0:1 ${loadaddr} gs2107/boot.scr; then source ${loadaddr}; fi; if ext4load usb 0:1 ${loadaddr} gs2107/boot.scr; then source ${loadaddr}; fi
 gs_nand_boot=if mtd read kernel ${loadaddr}; then setenv bootargs "${bootargs_base} watchdog.open_timeout=120"; bootm ${loadaddr}; fi
-gs_rescue_boot=if mtd read recovery ${loadaddr}; then setenv bootargs "${bootargs_base} gs2107.recovery=1 watchdog.open_timeout=120"; bootm ${loadaddr}; fi
-gs_fallback=if test "${recovery}" = "1"; then setenv recovery 0; else setenv recovery 1; fi; bootcount reset; setenv bootcount; saveenv; run gs_boot
-gs_recovery=echo "GS2107 recovery: USB/network/rescue image/NAND"; run gs_usb_boot; run gs_net_boot; run gs_rescue_boot; run gs_nand_boot
+gs_fallback=bootcount reset; setenv bootcount; if test "${recovery}" != "1"; then setenv recovery 1; saveenv; fi; run gs_boot
+gs_recovery=echo "GS2107 network rescue: USB, about 60 s of network boot probes, then NAND"; run gs_usb_boot; run gs_net_rescue; run gs_nand_boot
